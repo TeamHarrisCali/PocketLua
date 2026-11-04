@@ -11,6 +11,7 @@
 #include <utility/PI4IOE5V6408_Class.hpp>
 #include "hw.h"
 #include "storage.h"
+#include "usbdev.h"
 
 static String str(lua_State *L, int i) { return String(luaL_checkstring(L, i)); }
 static int num(lua_State *L, int i) { return (int)luaL_checknumber(L, i); }
@@ -36,15 +37,19 @@ static void useSpeaker() {
   spkLastUse = millis();
 }
 
-static void useMic(uint32_t rate) {
+static bool useMic(uint32_t rate) {
   if (M5Cardputer.Speaker.isRunning()) M5Cardputer.Speaker.end();
   auto c = M5Cardputer.Mic.config();
   if (!M5Cardputer.Mic.isRunning() || c.sample_rate != rate) {
     M5Cardputer.Mic.end();
     c.sample_rate = rate;
     M5Cardputer.Mic.config(c);
-    M5Cardputer.Mic.begin();
+    bool ok = M5Cardputer.Mic.begin();
+    usbdev::log(String("mic begin ") + (ok ? "ok" : "FAILED") + " rate=" + rate + " enabled=" +
+                M5Cardputer.Mic.isEnabled() + " running=" + M5Cardputer.Mic.isRunning());
+    return ok;
   }
+  return true;
 }
 
 static void wavHeader(uint8_t *h, uint32_t rate, uint32_t dataBytes) {
@@ -70,6 +75,8 @@ static void recTask(void *) {
     }
     while (M5Cardputer.Mic.isRecording()) vTaskDelay(1);
   }
+  usbdev::log(String("recording done: ") + aSamples + " samples (" + (aSamples / (aRate ? aRate : 1)) + " s)" +
+              (buf[0] && buf[1] ? "" : " - no buffer memory"));
   uint8_t h[44];
   wavHeader(h, aRate, aSamples * 2);
   aFile.seek(0);
@@ -118,11 +125,18 @@ static int au_record(lua_State *L) {
   uint8_t h[44] = {0};
   aFile.write(h, 44);
   store::pin(true);
-  useMic(aRate);
+  if (!useMic(aRate)) {
+    aFile.close();
+    store::pin(false);
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, "microphone failed to start");
+    return 2;
+  }
   aSamples = 0;
   aStop = false;
   aMode = A_REC;
-  xTaskCreatePinnedToCore(recTask, "rec", 4096, nullptr, 3, &aTask, 0);
+  // 8 KB: SD writes (FATFS + SPI) need more than 4 KB of stack
+  xTaskCreatePinnedToCore(recTask, "rec", 8192, nullptr, 3, &aTask, 0);
   lua_pushboolean(L, 1);
   return 1;
 }
@@ -167,7 +181,7 @@ static int au_play(lua_State *L) {
   useSpeaker();
   aStop = false;
   aMode = A_PLAY;
-  xTaskCreatePinnedToCore(playTask, "play", 4096, nullptr, 3, &aTask, 0);
+  xTaskCreatePinnedToCore(playTask, "play", 8192, nullptr, 3, &aTask, 0);
   lua_pushboolean(L, 1);
   return 1;
 }
@@ -197,7 +211,7 @@ static int au_analyze(lua_State *L) {
   const uint32_t rate = 16000;
   int16_t *s = (int16_t *)malloc(N * 2);
   if (!s) return luaL_error(L, "not enough memory");
-  useMic(rate);
+  if (!useMic(rate)) { free(s); return luaL_error(L, "microphone failed to start"); }
   M5Cardputer.Mic.record(s, N, rate);
   while (M5Cardputer.Mic.isRecording()) vTaskDelay(1);
 

@@ -37,7 +37,6 @@ static int vprintfHook(const char *fmt, va_list ap) {
 }
 
 void begin() {
-  Serial.setDebugOutput(false);              // Arduino log_e -> ets_printf
   esp_rom_install_channel_putc(1, putChar);  // ets_printf -> here
   esp_log_set_vprintf(vprintfHook);          // ESP-IDF ESP_LOGx -> here
 }

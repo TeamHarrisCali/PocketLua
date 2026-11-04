@@ -18,6 +18,15 @@ static const size_t HDR = (sizeof(Page) + STEP - 1) & ~(STEP - 1);
 static Page *partial[NCLS];
 static size_t pages = 0;
 
+static void *defaultAlloc(size_t size, size_t align) { return heap_caps_aligned_alloc(align, size, MALLOC_CAP_8BIT); }
+static void (*freePage)(void *) = heap_caps_free;
+static void *(*allocPage)(size_t, size_t) = defaultAlloc;
+
+void setBackend(void *(*a)(size_t, size_t), void (*f)(void *)) {
+  allocPage = a;
+  freePage = f;
+}
+
 static inline int classOf(size_t n) { return (int)((n + STEP - 1) / STEP) - 1; }
 static inline size_t slotSize(int c) { return (size_t)(c + 1) * STEP; }
 
@@ -39,7 +48,7 @@ void *alloc(size_t n) {
   int c = classOf(n);
   Page *p = partial[c];
   if (!p) {
-    p = (Page *)heap_caps_aligned_alloc(PAGE, PAGE, MALLOC_CAP_8BIT);
+    p = (Page *)allocPage(PAGE, PAGE);
     if (!p) return nullptr;
     p->cls = c;
     p->used = 0;
@@ -69,7 +78,7 @@ void release(void *b, size_t) {
   p->freeList = b;
   if (--p->used == 0) {
     if (!wasFull) unlink(p);
-    heap_caps_free(p);
+    freePage(p);
     pages--;
     return;
   }

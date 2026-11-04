@@ -31,7 +31,8 @@ size_t luaMemUsed() { return vm::memUsed(); }
 static void logHeap(const char *tag) {
   usbdev::log(String("heap ") + tag + ": free=" + ESP.getFreeHeap() + " largest=" +
               heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + " lua=" + vm::memUsed() +
-              " pool=" + luapool::pageBytes() + " stack_free=" + uxTaskGetStackHighWaterMark(nullptr));
+              " pool=" + luapool::pageBytes() + " arena_free=" + vm::arenaFree() +
+              " stack_free=" + uxTaskGetStackHighWaterMark(nullptr));
 }
 
 // Renders the next frame band by band into a 24-bit BMP (top-down rows).
@@ -212,6 +213,7 @@ static void osMain() {
     delay(60);
   }
   store::safeMode = safe;
+  vm::reserveArena();  // before Wi-Fi can fragment the heap
   shell::begin(safe);
   logHeap(safe ? "booted (safe)" : "booted");
 
@@ -252,7 +254,8 @@ static void osMain() {
 SET_LOOP_TASK_STACK_SIZE(20 * 1024);  // Lua C-call depth is capped (LUAI_MAXCCALLS) to fit
 
 void setup() {
-  Serial.begin(115200);
+  // No Serial.begin(): UART0 TX is GPIO43, which the ADV uses for the mic's
+  // I2S word-select line. Logs go to USB serial and the SD card instead.
   syslog::begin();
   osMain();  // never returns
 }

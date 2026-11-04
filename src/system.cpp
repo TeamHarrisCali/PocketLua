@@ -453,7 +453,7 @@ static void launch(const String &name, const String &path, int line, bool return
   appName = name;
   appTitle = name;
   if (const AppInfo *a = findApp(name)) appTitle = a->title;
-  if (freeHeap() < MIN_FREE_TO_OPEN) { fail("not enough memory to open " + name); return; }
+  if (vm::arenaFree() < MIN_FREE_TO_OPEN) { fail("not enough memory to open " + name); return; }
   if (!vm::open()) { fail(vm::lastError); return; }
   vmGen++;
   lua_State *L = vm::L;

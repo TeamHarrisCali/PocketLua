@@ -165,7 +165,6 @@ String serialRead() {
 // can be read later even if USB was not connected when something failed.
 static bool inFileLog = false;
 void log(const String &line) {
-  Serial.println(line);
   if (!inFileLog && xTaskGetCurrentTaskHandle() == mainTask) {
     inFileLog = true;
     String l = String(millis() / 1000) + "s " + line + "\n";

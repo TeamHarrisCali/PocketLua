@@ -10,6 +10,11 @@ namespace vm {
 extern lua_State *L;
 extern String lastError;
 
+// Reserves the Lua arena. Call once at boot, before Wi-Fi starts: Wi-Fi's
+// buffers fragment the heap, and Lua needs blocks bigger than what is left.
+void reserveArena();
+size_t arenaFree();
+
 bool open();
 void close();
 // lua_pcall with the script time budget; on error sets lastError, pops it

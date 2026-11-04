@@ -1,5 +1,6 @@
 #include "vm.h"
 #include <esp_heap_caps.h>
+#include <multi_heap.h>
 #include "bindings.h"
 #include "hw.h"
 #include "luapool.h"
@@ -14,11 +15,32 @@ lua_State *L = nullptr;
 String lastError;
 
 static size_t used = 0;
-// Scripts may use up to MEM_LIMIT, but never push free internal RAM below
-// HEAP_RESERVE: Wi-Fi, USB and the SD driver allocate at run time and this
-// board has no PSRAM to fall back on.
+// Lua gets its own contiguous arena, reserved at boot before Wi-Fi starts, so
+// Wi-Fi's churn of small buffers can never fragment it. Without an arena
+// (reservation failed) it falls back to the system heap with a reserve.
+static const size_t ARENA_SIZE = 84 * 1024;
 static const size_t MEM_LIMIT = 160 * 1024;
 static const size_t HEAP_RESERVE = 16 * 1024;
+static multi_heap_handle_t arena = nullptr;
+static void *arenaMem = nullptr;
+
+static void *aMalloc(size_t n) { return arena ? multi_heap_malloc(arena, n) : malloc(n); }
+static void *aRealloc(void *p, size_t n) { return arena ? multi_heap_realloc(arena, p, n) : realloc(p, n); }
+static void aFree(void *p) { if (arena) multi_heap_free(arena, p); else free(p); }
+static void *arenaPage(size_t size, size_t align) { return multi_heap_aligned_alloc(arena, size, align); }
+static void arenaPageFree(void *p) { multi_heap_free(arena, p); }
+
+void reserveArena() {
+  if (arena) return;
+  arenaMem = heap_caps_malloc(ARENA_SIZE, MALLOC_CAP_8BIT);
+  if (!arenaMem) { usbdev::log("lua arena: could not reserve, using the shared heap"); return; }
+  arena = multi_heap_register(arenaMem, ARENA_SIZE);
+  if (!arena) { heap_caps_free(arenaMem); arenaMem = nullptr; return; }
+  luapool::setBackend(arenaPage, arenaPageFree);
+  usbdev::log(String("lua arena: ") + ARENA_SIZE / 1024 + " KB reserved");
+}
+
+size_t arenaFree() { return arena ? multi_heap_free_size(arena) : heap_caps_get_free_size(MALLOC_CAP_8BIT); }
 static const uint32_t CALL_BUDGET_MS = 2500;
 static uint32_t callStart = 0;
 static bool timedOut = false;
@@ -27,7 +49,7 @@ size_t memUsed() { return used; }
 
 static void releaseBlock(void *p, size_t size) {
   if (size <= luapool::MAX_SMALL) luapool::release(p, size);
-  else free(p);
+  else aFree(p);
 }
 
 // Lua passes the old block size with every free/realloc, so small blocks go to
@@ -38,7 +60,7 @@ static void *alloc(void *, void *ptr, size_t osize, size_t nsize) {
     if (ptr) { used -= osize; releaseBlock(ptr, osize); }
     return nullptr;
   }
-  if (nsize > osize) {
+  if (nsize > osize && !arena) {
     size_t grow = nsize - osize;
     if (used + grow > MEM_LIMIT) return nullptr;
     if (heap_caps_get_free_size(MALLOC_CAP_8BIT) < grow + HEAP_RESERVE) return nullptr;
@@ -47,13 +69,13 @@ static void *alloc(void *, void *ptr, size_t osize, size_t nsize) {
   bool newSmall = nsize <= luapool::MAX_SMALL;
   void *p;
   if (!ptr) {
-    p = newSmall ? luapool::alloc(nsize) : malloc(nsize);
+    p = newSmall ? luapool::alloc(nsize) : aMalloc(nsize);
   } else if (oldSmall && newSmall && luapool::sameClass(osize, nsize)) {
     p = ptr;
   } else if (!oldSmall && !newSmall) {
-    p = realloc(ptr, nsize);
+    p = aRealloc(ptr, nsize);
   } else {
-    p = newSmall ? luapool::alloc(nsize) : malloc(nsize);
+    p = newSmall ? luapool::alloc(nsize) : aMalloc(nsize);
     if (p) {
       memcpy(p, ptr, osize < nsize ? osize : nsize);
       releaseBlock(ptr, osize);

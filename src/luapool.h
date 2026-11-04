@@ -10,6 +10,9 @@ namespace luapool {
 
 static const size_t MAX_SMALL = 64;  // larger blocks use the normal heap
 
+// Where pages come from (default: the system heap).
+void setBackend(void *(*pageAlloc)(size_t size, size_t align), void (*pageFree)(void *));
+
 void *alloc(size_t n);         // 1 <= n <= MAX_SMALL
 void release(void *p, size_t n);
 bool sameClass(size_t a, size_t b);
