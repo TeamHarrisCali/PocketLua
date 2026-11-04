@@ -9,6 +9,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <utility/PI4IOE5V6408_Class.hpp>
+#include <driver/i2s_std.h>
 #include "hw.h"
 #include "storage.h"
 #include "usbdev.h"
@@ -31,27 +32,80 @@ static bool aStereo = false;
 static uint32_t spkLastUse = 0;
 static const size_t ABUF = 1024;  // samples per buffer
 
+// The ADV's mic goes through an ES8311 codec that shares its I2S pins with the
+// speaker. M5Unified's Mic reads a constant value once the speaker has used the
+// pins (IDF 5.5, espressif/esp-idf#18621), so the mic is driven here instead:
+// reset the pins, reset and set up the codec's ADC, open our own I2S RX channel.
+static i2s_chan_handle_t micRx = nullptr;
+static uint32_t micRate = 0, micLastUse = 0;
+static const uint8_t ES8311 = 0x18;
+
+static void micClose() {
+  if (!micRx) return;
+  i2s_channel_disable(micRx);
+  i2s_del_channel(micRx);
+  micRx = nullptr;
+  micRate = 0;
+  M5.In_I2C.writeRegister8(ES8311, 0x0D, 0xFC, 400000);  // power down the analog side
+}
+
 static void useSpeaker() {
-  if (M5Cardputer.Mic.isRunning()) M5Cardputer.Mic.end();
+  micClose();
   if (!M5Cardputer.Speaker.isRunning()) M5Cardputer.Speaker.begin();
   spkLastUse = millis();
 }
 
 static bool useMic(uint32_t rate) {
+  micLastUse = millis();
+  if (micRx && micRate == rate) return true;
   if (M5Cardputer.Speaker.isRunning()) M5Cardputer.Speaker.end();
-  auto c = M5Cardputer.Mic.config();
-  if (!M5Cardputer.Mic.isRunning() || c.sample_rate != rate) {
-    M5Cardputer.Mic.end();
-    c.sample_rate = rate;
-    M5Cardputer.Mic.config(c);
-    bool ok = M5Cardputer.Mic.begin();
-    // On the ADV the mic goes through an ES8311 codec, and M5Unified leaves its
-    // preamp at the minimum (0 dB), which records near-silence. Mic1 + 24 dB.
-    if (ok && M5.getBoard() == m5::board_t::board_M5CardputerADV) M5.In_I2C.writeRegister8(0x18, 0x14, 0x18, 100000);
-    usbdev::log(String("mic begin ") + (ok ? "ok" : "FAILED") + " rate=" + rate + " enabled=" +
-                M5Cardputer.Mic.isEnabled() + " running=" + M5Cardputer.Mic.isRunning());
-    return ok;
+  if (M5Cardputer.Mic.isRunning()) M5Cardputer.Mic.end();
+  micClose();
+  for (int p : {41, 42, 43, 46}) gpio_reset_pin((gpio_num_t)p);
+
+  M5.In_I2C.writeRegister8(ES8311, 0x00, 0x1F, 400000);  // reset
+  delay(20);
+  static const uint8_t regs[][2] = {
+      {0x00, 0x00}, {0x45, 0x00}, {0x00, 0x80},  // leave reset, power on
+      {0x01, 0xBA}, {0x02, 0x18},                // MCLK from BCLK, x8
+      {0x0A, 0x0C},                              // ADC out: I2S, 16-bit
+      {0x0D, 0x01}, {0x0E, 0x02}, {0x12, 0x02},  // analog + ADC on, DAC off
+      {0x14, 0x18},                              // Mic1, preamp +24 dB
+      {0x17, 0xBF}, {0x1C, 0x6A}};               // ADC 0 dB, remove DC
+  for (auto &r : regs) M5.In_I2C.writeRegister8(ES8311, r[0], r[1], 400000);
+  uint8_t id = M5.In_I2C.readRegister8(ES8311, 0xFD, 400000);
+
+  // Stereo frames at twice the rate; micRead() sums both slots and averages
+  // pairs, so it works whichever slot the codec puts the ADC on.
+  i2s_chan_config_t cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
+  cc.dma_desc_num = 4;
+  cc.dma_frame_num = 256;
+  i2s_std_config_t sc = {
+      .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(rate * 2),
+      .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
+      .gpio_cfg = {I2S_GPIO_UNUSED, GPIO_NUM_41, GPIO_NUM_43, I2S_GPIO_UNUSED, GPIO_NUM_46, {0, 0, 0}},
+  };
+  bool ok = i2s_new_channel(&cc, nullptr, &micRx) == ESP_OK;
+  if (ok) ok = i2s_channel_init_std_mode(micRx, &sc) == ESP_OK && i2s_channel_enable(micRx) == ESP_OK;
+  if (!ok && micRx) { i2s_del_channel(micRx); micRx = nullptr; }
+  if (ok) micRate = rate;
+  usbdev::log(String("mic begin ") + (ok ? "ok" : "FAILED") + " rate=" + rate + " codec id=0x" + String(id, HEX));
+  return ok;
+}
+
+// Reads n mono samples at micRate.
+static bool micRead(int16_t *out, size_t n) {
+  int16_t in[256];  // 64 output samples per read
+  while (n) {
+    size_t want = n < 64 ? n : 64, got = 0;
+    if (i2s_channel_read(micRx, in, want * 8, &got, 500) != ESP_OK || got < want * 8) return false;
+    for (size_t i = 0; i < want; i++) {
+      int v = ((int)in[i * 4] + in[i * 4 + 1] + in[i * 4 + 2] + in[i * 4 + 3]) / 2;
+      *out++ = v > 32767 ? 32767 : v < -32768 ? -32768 : v;
+    }
+    n -= want;
   }
+  micLastUse = millis();
   return true;
 }
 
@@ -64,38 +118,31 @@ static void wavHeader(uint8_t *h, uint32_t rate, uint32_t dataBytes) {
 }
 
 static void recTask(void *) {
-  int16_t *buf[2] = {(int16_t *)malloc(ABUF * 2), (int16_t *)malloc(ABUF * 2)};
+  // The I2S DMA buffers (32 ms) keep capturing while a block goes to the card.
+  int16_t *buf = (int16_t *)malloc(ABUF * 2);
   int peak = 0;
   uint64_t sumAbs = 0;
-  if (buf[0] && buf[1]) {
-    M5Cardputer.Mic.record(buf[0], ABUF, aRate);
-    M5Cardputer.Mic.record(buf[1], ABUF, aRate);
-    int idx = 0;
-    while (!aStop && aSamples < aRate * 600) {  // 10 minutes max
-      while (M5Cardputer.Mic.isRecording() == 2) vTaskDelay(1);
-      for (size_t i = 0; i < ABUF; i++) {
-        int v = abs(buf[idx][i]);
-        if (v > peak) peak = v;
-        sumAbs += v;
-      }
-      aFile.write((uint8_t *)buf[idx], ABUF * 2);
-      aSamples = aSamples + ABUF;
-      M5Cardputer.Mic.record(buf[idx], ABUF, aRate);
-      idx ^= 1;
+  bool readOk = true;
+  while (buf && !aStop && aSamples < aRate * 600) {  // 10 minutes max
+    if (!(readOk = micRead(buf, ABUF))) break;
+    for (size_t i = 0; i < ABUF; i++) {
+      int v = abs(buf[i]);
+      if (v > peak) peak = v;
+      sumAbs += v;
     }
-    while (M5Cardputer.Mic.isRecording()) vTaskDelay(1);
+    aFile.write((uint8_t *)buf, ABUF * 2);
+    aSamples = aSamples + ABUF;
   }
   usbdev::log(String("recording done: ") + aSamples + " samples (" + (aSamples / (aRate ? aRate : 1)) + " s) peak=" +
               peak + " avg=" + (uint32_t)(aSamples ? sumAbs / aSamples : 0) +
-              (buf[0] && buf[1] ? "" : " - no buffer memory"));
+              (buf ? "" : " - no buffer memory") + (readOk ? "" : " - mic read failed"));
   uint8_t h[44];
   wavHeader(h, aRate, aSamples * 2);
   aFile.seek(0);
   aFile.write(h, 44);
   aFile.close();
-  free(buf[0]);
-  free(buf[1]);
-  M5Cardputer.Mic.end();
+  free(buf);
+  micClose();
   store::pin(false);
   aMode = A_IDLE;
   aTask = nullptr;
@@ -222,9 +269,7 @@ static int au_analyze(lua_State *L) {
   const uint32_t rate = 16000;
   int16_t *s = (int16_t *)malloc(N * 2);
   if (!s) return luaL_error(L, "not enough memory");
-  if (!useMic(rate)) { free(s); return luaL_error(L, "microphone failed to start"); }
-  M5Cardputer.Mic.record(s, N, rate);
-  while (M5Cardputer.Mic.isRecording()) vTaskDelay(1);
+  if (!useMic(rate) || !micRead(s, N)) { free(s); return luaL_error(L, "microphone failed to start"); }
 
   double sum = 0;
   int peak = 0;
@@ -277,6 +322,8 @@ void hwTick() {
     if (M5Cardputer.Speaker.isPlaying()) spkLastUse = millis();
     else if (millis() - spkLastUse > 4000) M5Cardputer.Speaker.end();
   }
+  // Same for the mic once analyze() stops being called.
+  if (aMode == A_IDLE && micRx && millis() - micLastUse > 4000) micClose();
 }
 
 // Shared by snd.tone in bindings.cpp
