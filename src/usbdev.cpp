@@ -16,6 +16,7 @@ static USBMSC msc;
 static USBCDC cdc(0);
 static bool kOn = false, mOn = false, cOn = false, shared = false, consoleOn = false;
 static String ring;
+static TaskHandle_t mainTask = nullptr;
 static bool wasConnected = false;
 
 static int32_t onRead(uint32_t lba, uint32_t, void *buf, uint32_t size) {
@@ -35,6 +36,9 @@ static int32_t onWrite(uint32_t lba, uint32_t, uint8_t *buf, uint32_t size) {
 static bool onStartStop(uint8_t, bool, bool) { return true; }
 
 void begin(bool keyboard, bool drive, bool serial, bool console, bool mouseWanted) {
+  mainTask = xTaskGetCurrentTaskHandle();
+  // keep the file log small: start a fresh one each boot
+  store::write("data/log.txt", "");
   consoleOn = console;
   msOn = mouseWanted;
   kOn = keyboard;
@@ -147,8 +151,17 @@ String serialRead() {
   return out;
 }
 
+// The log is also appended to data/log.txt on the card (main task only), so it
+// can be read later even if USB was not connected when something failed.
+static bool inFileLog = false;
 void log(const String &line) {
   Serial.println(line);
+  if (!inFileLog && xTaskGetCurrentTaskHandle() == mainTask) {
+    inFileLog = true;
+    String l = String(millis() / 1000) + "s " + line + "\n";
+    store::append("data/log.txt", l.c_str(), l.length());
+    inFileLog = false;
+  }
   ring += line;
   ring += '\n';
   if (ring.length() > 3000) ring.remove(0, ring.length() - 3000);

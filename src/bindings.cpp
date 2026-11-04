@@ -287,15 +287,22 @@ bool wifiEnable(bool on) {
   if (on) {
     size_t before = heap_caps_get_free_size(MALLOC_CAP_8BIT);
     size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    bool ok = WiFi.mode(WIFI_STA) && WiFi.getMode() != WIFI_OFF;
-    usbdev::log(String("wifi start ") + (ok ? "ok" : "FAILED") + ": free before=" + before + " largest=" + largest +
-                " after=" + heap_caps_get_free_size(MALLOC_CAP_8BIT));
+    bool modeOk = WiFi.mode(WIFI_STA);
+    wifi_mode_t gm = WiFi.getMode();
+    bool ok = modeOk && gm != WIFI_OFF;
+    usbdev::log(String("wifi start ") + (ok ? "ok" : "FAILED") + ": mode()=" + modeOk + " getMode=" + (int)gm +
+                " free before=" + before + " largest=" + largest + " after=" + heap_caps_get_free_size(MALLOC_CAP_8BIT));
     if (!ok) {
-      // Release whatever the failed start set up (the reason is in the log
-      // as "sys:" lines from the driver, see syslog.cpp).
-      usbdev::log(String("wifi diag: internal_free=") + heap_caps_get_free_size(MALLOC_CAP_INTERNAL) +
+      // WiFi.mode() only says yes/no. Ask the driver which step fails; these
+      // calls do not tear anything down.
+      wifi_mode_t dm = WIFI_MODE_NULL;
+      esp_err_t ge = esp_wifi_get_mode(&dm);
+      esp_err_t se = esp_wifi_set_mode(WIFI_MODE_STA);
+      esp_err_t st = esp_wifi_start();
+      usbdev::log(String("wifi diag: get_mode=") + esp_err_to_name(ge) + "/" + (int)dm + " set_mode=" + esp_err_to_name(se) +
+                  " start=" + esp_err_to_name(st) + " internal_free=" + heap_caps_get_free_size(MALLOC_CAP_INTERNAL) +
                   " dma_largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
-      WiFi.mode(WIFI_OFF);
+      if (st == ESP_OK) esp_wifi_stop();
     }
     return ok;
   }
