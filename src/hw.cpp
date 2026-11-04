@@ -108,7 +108,7 @@ static bool useMic(uint32_t rate) {
       {0x01, 0xBA}, {0x02, 0x18},                // MCLK from BCLK, x8
       {0x0A, 0x0C},                              // ADC out: I2S, 16-bit
       {0x0D, 0x01}, {0x0E, 0x02}, {0x12, 0x02},  // analog + ADC on, DAC off
-      {0x14, 0x18},                              // Mic1, preamp +24 dB
+      {0x14, 0x1A},                              // Mic1, preamp +30 dB
       {0x17, 0xBF}, {0x1C, 0x6A}};               // ADC 0 dB, remove DC
   for (auto &r : regs) M5.In_I2C.writeRegister8(ES8311, r[0], r[1], 400000);
   uint8_t id = M5.In_I2C.readRegister8(ES8311, 0xFD, 400000);

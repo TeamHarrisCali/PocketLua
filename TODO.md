@@ -2,9 +2,8 @@
 
 Open issues found on the device. Newest first.
 
-- [ ] Recordings are clean but a little quiet (peak about 3500, average about 250 of 32767).
-  If needed, raise the ES8311 preamp in `useMic` (`hw.cpp`, register 0x14) from 0x18
-  (+24 dB) to 0x1A (+30 dB).
+- [ ] Mic preamp raised from +24 dB to +30 dB (`useMic` in `hw.cpp`, ES8311 register
+  0x14 = 0x1A); the louder level needs a device test.
 - [ ] Not yet verified on the device: IR codes, tilt directions (Marble, Air Mouse,
   Level), LoRa Chat and GPS with the Cap LoRa-1262.
 
