@@ -835,6 +835,7 @@ static int ht_ping(lua_State *L) {
 
 // =============================================================== LoRa (Cap LoRa-1262)
 static SX1262 *radio = nullptr;
+static Module *radioMod = nullptr;  // SX1262 does not own it
 static volatile bool radioFlag = false;
 static bool radioTx = false;
 static void IRAM_ATTR onRadio() { radioFlag = true; }
@@ -849,7 +850,7 @@ static int lo_begin(lua_State *L) {
   ioe.setDirection(0, true);
   ioe.setHighImpedance(0, false);
   ioe.digitalWrite(0, true);  // RF switch
-  if (!radio) radio = new SX1262(new Module(5, 4, 3, 6));
+  if (!radio) radio = new SX1262(radioMod = new Module(5, 4, 3, 6));
   int st = radio->begin(freq, 125.0, sf, 5, 0x12, power, 12, 3.0, true);
   luaBudgetReset();
   if (st != RADIOLIB_ERR_NONE) { lua_pushboolean(L, 0); lua_pushfstring(L, "radio error %d", st); return 2; }
@@ -895,10 +896,12 @@ static int lo_recv(lua_State *L) {
 
 static int lo_busy(lua_State *L) { lua_pushboolean(L, radioTx); return 1; }
 
-static int lo_stop(lua_State *L) {
+static void loraOff() {
   if (radio) { radio->sleep(); delete radio; radio = nullptr; }
-  return 0;
+  delete radioMod;
+  radioMod = nullptr;
 }
+static int lo_stop(lua_State *L) { loraOff(); return 0; }
 
 // =============================================================== GPS (Cap LoRa-1262)
 static TinyGPSPlus *gpsP = nullptr;
@@ -907,11 +910,19 @@ static int gp_start(lua_State *L) {
   Serial1.begin(115200, SERIAL_8N1, 15, 13);
   return 0;
 }
-static int gp_stop(lua_State *L) {
-  Serial1.end();
+static void gpsOff() {
+  if (gpsP) Serial1.end();
   delete gpsP;
   gpsP = nullptr;
-  return 0;
+}
+static int gp_stop(lua_State *L) { gpsOff(); return 0; }
+
+// Called by the shell when an app closes (or fails): the LoRa radio and the GPS
+// serial port go off and give back their memory, whether or not the app
+// stopped them. Drivers belong to the core; an app only borrows them.
+void hwReleaseDrivers() {
+  loraOff();
+  gpsOff();
 }
 // read() -> table with valid, lat, lon, alt, sats, hdop, speed (km/h), course,
 // time ("hh:mm:ss" UTC), date ("yyyy-mm-dd"), chars (NMEA characters seen)
