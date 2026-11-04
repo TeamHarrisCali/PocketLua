@@ -24,6 +24,7 @@ extern M5Canvas canvas;
 using ui::col;
 
 bool discordBusy();  // discord.cpp: a TLS request is running and needs the heap
+void setFrameSlim(bool slim);  // main.cpp: half-size frame buffer for HTTPS apps
 
 namespace shell {
 
@@ -427,6 +428,7 @@ static void closeApp(bool save) {
   g_displayHold = false;
   appsDirty = true;  // the app may have installed or edited apps
   focus(false);      // after vm::close(), so Wi-Fi gets the freed RAM
+  setFrameSlim(false);
 }
 
 static void fail(const String &msg) {
@@ -478,6 +480,7 @@ static void launch(const String &name, const String &path, int line, bool return
   if (const AppInfo *a = findApp(name)) appTitle = a->title;
   if (vm::arenaFree() < MIN_FREE_TO_OPEN) { fail("not enough memory to open " + name); return; }
   const AppInfo *info = findApp(name);
+  setFrameSlim(info && info->tls);  // HTTPS apps: 8 KB more heap for the network stack
   if (!vm::open(info && info->tls)) { fail(vm::lastError); return; }
   vmGen++;
   lua_State *L = vm::L;

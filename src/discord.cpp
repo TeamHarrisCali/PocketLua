@@ -464,7 +464,7 @@ void taskMain(void *) {
 }
 
 // The task's stack (the TLS handshake runs on it), from the heap or the arena.
-const size_t STACK_WORDS = 12288 / sizeof(StackType_t);  // BearSSL's 31-bit math needed more than 8 KB
+const size_t STACK_WORDS = 11264 / sizeof(StackType_t);  // the handshake used ~9.4 KB (measured); the log reports what is left
 StackType_t *stack = nullptr;
 StaticTask_t tcb;
 TaskHandle_t handle = nullptr;  // stays set until the stack can be returned

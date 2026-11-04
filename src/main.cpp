@@ -18,11 +18,24 @@
 #include "syslog.h"
 
 // A quarter-screen frame buffer (16 KB instead of 65 KB): each frame is drawn
-// in four bands; g_bandY tells the drawing code which band it is.
+// in four bands; g_bandY tells the drawing code which band it is. Apps that
+// make HTTPS requests get eighth-screen bands (8 KB), since Wi-Fi and the
+// network stack need that heap during a TLS handshake.
 M5Canvas canvas(&M5Cardputer.Display);
-static const int BAND_H = (SCREEN_H + 3) / 4;
+static const int BAND_H = (SCREEN_H + 3) / 4, SLIM_BAND_H = (SCREEN_H + 7) / 8;
 int g_bandY = 0;
 int g_bandH = BAND_H;
+
+void setFrameSlim(bool slim) {
+  int h = slim ? SLIM_BAND_H : BAND_H;
+  if (h == g_bandH) return;
+  canvas.deleteSprite();
+  if (!canvas.createSprite(SCREEN_W, h)) {  // no room for the full buffer: stay slim
+    h = SLIM_BAND_H;
+    canvas.createSprite(SCREEN_W, h);
+  }
+  g_bandH = h;
+}
 bool g_displayAsleep = false;  // display sleep: nothing is drawn
 bool g_displayHold = false;    // an app draws straight to the panel
 String g_screenshotPath;       // taken on the next frame
@@ -52,9 +65,9 @@ static bool writeScreenshot(const String &path) {
   put32(34, rowBytes * SCREEN_H);
   f.write(h, 54);
   uint8_t row[SCREEN_W * 3];
-  for (g_bandY = 0; g_bandY < SCREEN_H; g_bandY += BAND_H) {
+  for (g_bandY = 0; g_bandY < SCREEN_H; g_bandY += g_bandH) {
     shell::drawBand();
-    for (int y = 0; y < BAND_H && g_bandY + y < SCREEN_H; y++) {
+    for (int y = 0; y < g_bandH && g_bandY + y < SCREEN_H; y++) {
       for (int x = 0; x < SCREEN_W; x++) {
         uint16_t c = canvas.readPixel(x, y);
         row[x * 3] = (c & 0x1F) << 3;
@@ -259,7 +272,7 @@ static void osMain() {
       g_screenshotPath = "";
       shell::screenshotDone(path, writeScreenshot(path));
     } else if (!g_displayAsleep && !g_displayHold) {
-      for (g_bandY = 0; g_bandY < SCREEN_H; g_bandY += BAND_H) {
+      for (g_bandY = 0; g_bandY < SCREEN_H; g_bandY += g_bandH) {
         shell::drawBand();
         canvas.pushSprite(0, g_bandY);
       }
