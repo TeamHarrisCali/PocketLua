@@ -205,7 +205,8 @@ static void osMain() {
     bool console = cfgGet("usb_console", "0") == "1";
     bool mouse = cfgGet("usb_mouse", "0") == "1";
     usbdev::begin(kbd, drive, serial, console, mouse);
-    usbdev::log(String("LiveOS boot, storage=") + store::kind() + ", embedded files=" + (int)EMBEDDED_COUNT);
+    usbdev::log(String("LiveOS boot, storage=") + store::kind() + ", embedded files=" + (int)EMBEDDED_COUNT +
+                ", board=" + (int)M5.getBoard() + (M5.getBoard() == m5::board_t::board_M5CardputerADV ? " (ADV)" : ""));
   }
   bool safe = false;
   for (int i = 0; i < 12; i++) {

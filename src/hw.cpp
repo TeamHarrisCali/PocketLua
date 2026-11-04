@@ -45,6 +45,9 @@ static bool useMic(uint32_t rate) {
     c.sample_rate = rate;
     M5Cardputer.Mic.config(c);
     bool ok = M5Cardputer.Mic.begin();
+    // On the ADV the mic goes through an ES8311 codec, and M5Unified leaves its
+    // preamp at the minimum (0 dB), which records near-silence. Mic1 + 24 dB.
+    if (ok && M5.getBoard() == m5::board_t::board_M5CardputerADV) M5.In_I2C.writeRegister8(0x18, 0x14, 0x18, 100000);
     usbdev::log(String("mic begin ") + (ok ? "ok" : "FAILED") + " rate=" + rate + " enabled=" +
                 M5Cardputer.Mic.isEnabled() + " running=" + M5Cardputer.Mic.isRunning());
     return ok;
@@ -62,12 +65,19 @@ static void wavHeader(uint8_t *h, uint32_t rate, uint32_t dataBytes) {
 
 static void recTask(void *) {
   int16_t *buf[2] = {(int16_t *)malloc(ABUF * 2), (int16_t *)malloc(ABUF * 2)};
+  int peak = 0;
+  uint64_t sumAbs = 0;
   if (buf[0] && buf[1]) {
     M5Cardputer.Mic.record(buf[0], ABUF, aRate);
     M5Cardputer.Mic.record(buf[1], ABUF, aRate);
     int idx = 0;
     while (!aStop && aSamples < aRate * 600) {  // 10 minutes max
       while (M5Cardputer.Mic.isRecording() == 2) vTaskDelay(1);
+      for (size_t i = 0; i < ABUF; i++) {
+        int v = abs(buf[idx][i]);
+        if (v > peak) peak = v;
+        sumAbs += v;
+      }
       aFile.write((uint8_t *)buf[idx], ABUF * 2);
       aSamples = aSamples + ABUF;
       M5Cardputer.Mic.record(buf[idx], ABUF, aRate);
@@ -75,7 +85,8 @@ static void recTask(void *) {
     }
     while (M5Cardputer.Mic.isRecording()) vTaskDelay(1);
   }
-  usbdev::log(String("recording done: ") + aSamples + " samples (" + (aSamples / (aRate ? aRate : 1)) + " s)" +
+  usbdev::log(String("recording done: ") + aSamples + " samples (" + (aSamples / (aRate ? aRate : 1)) + " s) peak=" +
+              peak + " avg=" + (uint32_t)(aSamples ? sumAbs / aSamples : 0) +
               (buf[0] && buf[1] ? "" : " - no buffer memory"));
   uint8_t h[44];
   wavHeader(h, aRate, aSamples * 2);
