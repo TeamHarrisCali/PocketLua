@@ -40,7 +40,11 @@ const char *HOST = "raw.githubusercontent.com";
 const char *REPO = "/TeamHarrisCali/PocketLua/";
 const char *CATALOG = "data/store/catalog.txt";
 
-String channel() { return cfgGet("store_channel", "beta"); }
+// The update channel: the branch the store reads, "main" (Release) or "beta".
+// The firmware knows which one it was built for; the setting changes only
+// through switchChannel(), which also brings the firmware and apps along.
+String builtChannel() { return POCKETLUA_CHANNEL + 7; }
+String channel() { return cfgGet("store_channel", builtChannel().c_str()); }
 
 // ---------------------------------------------------------------- progress
 void progress(const String &line, int pct = -1) {
@@ -386,6 +390,7 @@ String running() {
 // build on the device is often newer than the release)
 String fwStatus(const Firmware &fw) {
   if (fw.build == running()) return "installed";
+  if (channel() != builtChannel()) return "update";  // switching channel: even an older build
   return fw.time > POCKETLUA_BUILD_TIME ? "update" : "older";
 }
 
@@ -472,7 +477,7 @@ void check() {
   result = "checked";
 }
 
-// ops: "install:<app>,remove:<app>,firmware"
+// ops: "install:<app>,remove:<app>,lib:<module>,firmware"
 void apply(const String &ops) {
   std::vector<Entry> cat;  // only the apps named in ops, and the libraries
   Firmware fw;
@@ -505,6 +510,7 @@ void apply(const String &ops) {
     int colon = op.indexOf(':');
     String what = op.substring(0, colon), name = op.substring(colon + 1);
     if (what == "remove") { removes.push_back(name); continue; }
+    if (what == "lib") { addLib(name); continue; }
     for (auto &e : cat) {
       if (e.kind != "app" || e.name != name) continue;
       jobs.push_back({appPath(name), e.srcSize, e.srcSha});
@@ -547,6 +553,34 @@ void apply(const String &ops) {
   if (removes.size()) msg += String(msg.length() ? ", " : "") + removes.size() + " removed";
   if (restart) msg += String(msg.length() ? ". " : "") + "Firmware " + fw.build + " installed";
   result = failed ? "error: " + String(failed) + " failed: " + firstErr : (msg.length() ? msg : String("Nothing to do"));
+}
+
+// Moves to another channel: reads its catalog, then installs its firmware
+// and its version of every installed app and library that differs (which
+// restarts the device). If the catalog can't be read, nothing changes.
+void switchChannel(const String &to) {
+  if (to != "main" && to != "beta") { result = "error: unknown channel " + to; return; }
+  String from = channel();
+  cfgSet("store_channel", to);
+  check();
+  if (result != "checked") {
+    cfgSet("store_channel", from);
+    settingsFlush();
+    return;
+  }
+  settingsFlush();
+  Firmware fw;
+  String ops;
+  readCatalog([&](Entry &e) {
+    if (status(e) != "update") return;  // not installed, or already the same
+    if (e.kind == "app") ops += ",install:" + e.name;
+    else ops += ",lib:" + e.name.substring(4, e.name.length() - 4);  // lib/x/y.lua -> x/y
+    feedWatch();
+  }, fw);
+  if (fw.build.length() && fw.build != running()) ops += ",firmware";
+  usbdev::log("store: switching to " + to + ":" + ops);
+  if (ops.length()) apply(ops.substring(1));
+  else result = "Now on " + String(to == "main" ? "Release" : "Beta") + "; everything was already the same";
 }
 
 // ---------------------------------------------------------------- Lua
@@ -599,10 +633,11 @@ int l_result(lua_State *L) {
   return 1;
 }
 
+// channel() -> the channel the store reads, the channel the firmware was built for
 int l_channel(lua_State *L) {
-  if (lua_isstring(L, 1)) cfgSet("store_channel", lua_tostring(L, 1));
   lua_pushstring(L, channel().c_str());
-  return 1;
+  lua_pushstring(L, builtChannel().c_str());
+  return 2;
 }
 
 }  // namespace
@@ -616,6 +651,7 @@ void appstoreRun() {
   usbdev::log("store: " + op + " " + arg + " (channel " + channel() + ")");
   if (op == "check") check();
   else if (op == "apply") apply(arg);
+  else if (op == "switch") switchChannel(arg);
   freeTls();
   usbdev::log("store: " + result);  // every outcome, including "Wi-Fi isn't connected"
   if (restartInto.length()) {

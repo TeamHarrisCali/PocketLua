@@ -302,7 +302,7 @@ appstore = {
   list = function() return AS.cat end,
   run = function(op, arg) AS.runs[#AS.runs + 1] = { op, arg or "" } end,
   result = function() return AS.result end,
-  channel = function() return "beta" end,
+  channel = function() return AS.channel or "beta", "beta" end,
 }
 __hw_appstore = appstore
 local function lastrun() local r = AS.runs[#AS.runs]; return r and (r[1] .. " " .. r[2]) or "" end
@@ -355,6 +355,37 @@ check(shows("Wi-Fi isn't connected"), "store: shows errors")
 no_error("store")
 key("esc")
 check(shell.app() ~= "store" and shell.app() ~= "error", "Esc leaves the store (back to the previous app or home)")
+
+-- ---------------------------------------------------------------- Settings > About > Updates
+local function updates_row()
+  launch("settings")
+  for _ = 1, 6 do key("down") end
+  key("enter")   -- About
+  key("down")    -- Updates
+end
+AS.runs = {}
+AS.channel = "beta"
+updates_row()
+check(shows("Updates") and drew("Beta"), "channel: About shows Updates: Beta")
+key("enter")
+check(shows("Leave Beta"), "channel: leaving Beta asks first")
+key("y")
+check(shows("Type RELEASE"), "channel: then asks for RELEASE to be typed")
+type_text("nope"); key("enter")
+check(lastrun() == "" and shows("Still on Beta"), "channel: anything else keeps Beta")
+key("enter"); key("y"); type_text("release"); key("enter")
+check(lastrun() == "switch main", "channel: typing RELEASE switches to Release")
+shell.home(); frames(2)
+AS.runs = {}
+AS.channel = "main"
+updates_row()
+check(drew("Release"), "channel: About shows Updates: Release")
+key("enter")
+check(shows("Join Beta"), "channel: joining Beta asks once")
+key("y")
+check(lastrun() == "switch beta" and not shows("Type RELEASE"), "channel: yes switches to Beta, no typing")
+no_error("settings")
+shell.home(); frames(2)
 
 -- ================================================================ all five survive random keys
 for _, name in ipairs({ "clock", "notes", "calc", "images", "store" }) do

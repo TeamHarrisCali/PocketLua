@@ -21,7 +21,14 @@ catalog.txt, one entry per line, fields separated by tabs:
 separated module names). Core apps (Settings, App Store, editor) are also
 built into the firmware: they can be updated but not uninstalled.
 
-Commit release/ and push the branch the device reads (beta by default). The
+The firmware records its channel (PL_CHANNEL=main pio run for Release, plain
+pio run for beta); each channel is the branch of the same name, and the
+device reads the one its firmware belongs to:
+  beta     on development:  pio run; tools/release.py; commit; git push origin development:beta
+  Release  on main, after merging beta:  PL_CHANNEL=main pio run; tools/release.py;
+           commit; git push origin main
+
+Commit release/ and push the branch the device reads. The
 bytecode is made by .pio/luac32 (built by tools/gen_embed.py from lib/lua),
 so it matches the firmware's Lua.
 """
@@ -66,6 +73,13 @@ def main():
     fw = open(FIRMWARE, "rb").read()
     m = re.search(rb"PLBUILD:([0-9a-f]+\+?|unknown)", fw)
     build = m.group(1).decode() if m else "unknown"
+    c = re.search(rb"PLCHAN:(main|beta)", fw)
+    channel = c.group(1).decode() if c else "beta"
+    branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=ROOT,
+                            capture_output=True, text=True).stdout.strip()
+    if (channel == "main") != (branch == "main"):
+        sys.exit("firmware is a %s build but this is the %s branch: Release builds (PL_CHANNEL=main pio run) "
+                 "go on main, beta builds anywhere else" % (channel, branch))
     if build.endswith("+") or build == "unknown":
         print("warning: firmware build is %s (uncommitted changes); commit, rebuild, then release" % build)
     if os.path.exists(OUT):
@@ -108,7 +122,8 @@ def main():
     open(os.path.join(OUT, "catalog.txt"), "w").write("\n".join(lines) + "\n")
     apps = sum(1 for l in lines if l.startswith("app\t"))
     libs = sum(1 for l in lines if l.startswith("lib\t"))
-    print("release/: firmware %s (%d KB), %d apps, %d libraries" % (build, len(fw) // 1024, apps, libs))
+    print("release/: %s firmware %s (%d KB), %d apps, %d libraries" % (channel, build, len(fw) // 1024, apps, libs))
+    print("next: commit release/, then git push origin %s" % ("main" if channel == "main" else "development:beta"))
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include "bindings.h"
+#include "embedded.h"
 #include <vector>
 #include <M5Cardputer.h>
 #include <WiFi.h>
@@ -723,6 +724,7 @@ void registerApi(lua_State *L) {
   luaL_newlib(L, sysLib);
   lua_pushboolean(L, store::safeMode); lua_setfield(L, -2, "safe_mode");
   lua_pushstring(L, "0.1"); lua_setfield(L, -2, "version");
+  lua_pushstring(L, POCKETLUA_BUILD + 8); lua_setfield(L, -2, "build");  // git commit, "+" if edited
   lua_setglobal(L, "sys");
 
   static const luaL_Reg cfgLib[] = {{"get", c_get}, {"set", c_set}, {nullptr, nullptr}};

@@ -16,3 +16,4 @@ extern const size_t EMBEDDED_COUNT;
 // part after the colon with the catalog's firmware build.
 extern const char POCKETLUA_BUILD[];
 extern const long POCKETLUA_BUILD_TIME;  // commit time (Unix seconds)
+extern const char POCKETLUA_CHANNEL[];   // "PLCHAN:main" (Release) or "PLCHAN:beta"

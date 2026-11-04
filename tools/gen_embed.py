@@ -92,6 +92,10 @@ def build_time():
         return 0
 lines.append('const char POCKETLUA_BUILD[] = "PLBUILD:%s";' % build_id())
 lines.append("const long POCKETLUA_BUILD_TIME = %dL;" % build_time())
+# The update channel this firmware belongs to: "main" (Release) or "beta".
+# Set with PL_CHANNEL=main for a release build; anything else is beta.
+channel = "main" if os.environ.get("PL_CHANNEL") == "main" else "beta"
+lines.append('const char POCKETLUA_CHANNEL[] = "PLCHAN:%s";' % channel)
 text = "\n".join(lines) + "\n"
 
 old = None

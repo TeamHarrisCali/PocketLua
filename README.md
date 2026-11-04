@@ -12,15 +12,35 @@ The firmware holds only the core: Settings, the App Store and the editor. Every 
 
 On the card everything lives in `/pocketlua/` (renamed from `/liveos/` at first boot): `apps/<name>/main.lua` (+ `main.luac`, the bytecode that runs), `lib/`, `data/`.
 
-## Publishing apps
+## Release and Beta
+
+There are two update channels, each a branch of this repository with its own `release/` folder:
+
+- **Release** (`main`): the official builds.
+- **Beta** (`beta`): what comes next, to test before it goes to Release.
+
+A firmware is built for one channel and the App Store reads that channel. To change it, go to Settings > About > Updates. Joining Beta takes one confirmation; the device then installs the Beta firmware and the Beta version of every installed app, and restarts. Going back to Release is deliberately harder (you type `RELEASE`), because it installs the older Release firmware and apps, and data written by Beta apps may not work with them. Apps that exist only in Beta stay installed.
+
+## Publishing
+
+Beta, from `development`:
 
 ```bash
-pio run                    # build (the firmware records the git commit)
+pio run                    # a beta build (the firmware records the git commit and its channel)
 python3 tools/release.py   # release/: catalog.txt, apps and libraries as source + bytecode, PocketLua.bin
-git add release && git commit -m "Release" && git push origin development:beta
+git add release && git commit -m "Release (beta)" && git push origin development:beta
 ```
 
-The device reads the `beta` branch by default. Store-only apps (not part of the userland set) go in `store/apps/`.
+Release, once Beta has been tested:
+
+```bash
+git checkout main && git merge -X theirs beta
+PL_CHANNEL=main pio run    # a Release build
+python3 tools/release.py   # refuses a channel/branch mismatch
+git add release && git commit -m "Release" && git push origin main && git checkout development
+```
+
+Store-only apps (not built into the firmware) go in `store/apps/`.
 
 ## Keys
 
