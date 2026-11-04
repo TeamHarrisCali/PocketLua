@@ -20,6 +20,7 @@ void key(const String &spec);  // e.g. "enter", "ctrl+c", "f5"
 
 void serialWrite(const String &s);
 String serialRead();
+int serialGet();  // one received byte, or -1
 
 // Device log: kept in memory (last few KB) and written live to the USB serial
 // port as "# ..." lines unless the Lua console owns the port.

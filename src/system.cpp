@@ -955,6 +955,17 @@ static const char *B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01
 
 static void reply(const String &s) { usbdev::serialWrite(s + "\n"); }
 
+// Appends received bytes as text. Control bytes are dropped: String::indexOf
+// stops at a NUL, so one stray NUL would hide every later newline and the
+// console would never see another command. CR also ends a line.
+static void addInput(String &buf, const String &s) {
+  buf.reserve(buf.length() + s.length());
+  for (char c : s) {
+    if (c == '\n' || c == '\r') buf += '\n';
+    else if ((uint8_t)c >= 0x20 || c == '\t') buf += c;
+  }
+}
+
 static String b64decode(const String &in) {
   String out;
   int val = 0, bits = -8;
@@ -981,47 +992,73 @@ static String b64encode(const char *s, size_t n) {
 }
 
 // "!fput <path> <bytes>" streams a large file (a firmware update) straight to
-// storage: base64 lines follow until <bytes> have arrived. The UI is paused
-// meanwhile; USB flow control paces the host. The file is written as .part and
-// renamed at the end. Replies "ok <path> <bytes> <crc32>".
+// storage: base64 lines follow, each answered with "+" once it is on the card.
+// The host waits for that before sending the next line: Arduino's USB serial
+// drops bytes when its receive queue is full (e.g. during a slow SD write), so
+// there is no flow control to rely on. The UI is paused meanwhile. The file is
+// written as .part and renamed at the end. Replies "ok <path> <bytes> <crc32>".
+static int b64value(char c) {
+  const char *p = c ? strchr(B64, c) : nullptr;
+  return p ? (int)(p - B64) : -1;
+}
+
 static void conPut(const String &arg) {
   int sp = arg.lastIndexOf(' ');
   String path = sp > 0 ? arg.substring(0, sp) : "";
   size_t total = sp > 0 ? arg.substring(sp + 1).toInt() : 0;
   String real;
   fs::FS *fs = path.length() ? store::resolve(path, real, true) : nullptr;
+  const size_t LINE = 4096;  // base64 characters per line, at most
+  char *line = (char *)malloc(LINE);
+  uint8_t *bin = (uint8_t *)malloc(LINE / 4 * 3);
   File f;
-  if (!fs || !total || !(f = fs->open(real + ".part", "w"))) { reply("error: cannot write " + path); return; }
+  if (!line || !bin || !fs || !total || !(f = fs->open(real + ".part", "w"))) {
+    free(line); free(bin);
+    reply("error: cannot write " + path);
+    return;
+  }
   wake();
   auto &d = M5Cardputer.Display;
   d.fillRect(20, 45, 200, 45, ui::col.surface);
   d.setTextColor(ui::col.text);
   d.drawString("Receiving " + path, 28, 52);
+  conBuf = "";
   reply("ready");
 
-  size_t got = 0, nextDraw = 0;
+  size_t got = 0, nextDraw = 0, len = 0;
   uint32_t crc = 0, last = millis();
-  String in = conBuf;
-  conBuf = "";
-  while (got < total && millis() - last < 3000) {
-    int nl = in.indexOf('\n');
-    if (nl < 0) {
-      String s = usbdev::serialRead();
-      if (s.length()) { in += s; last = millis(); } else delay(1);
-      if (in.length() > 8192) break;  // not base64 lines
+  bool ok = true;
+  while (ok && got < total && millis() - last < 3000) {
+    int c = usbdev::serialGet();
+    if (c < 0) { delay(1); continue; }
+    last = millis();
+    if (c != '\n' && c != '\r') {
+      if (c >= 0x20 && len < LINE) line[len++] = (char)c;  // control bytes dropped
       continue;
     }
-    String chunk = b64decode(in.substring(0, nl));
-    in.remove(0, nl + 1);
-    if (f.write((const uint8_t *)chunk.c_str(), chunk.length()) != chunk.length()) break;
-    crc = esp_rom_crc32_le(crc, (const uint8_t *)chunk.c_str(), chunk.length());
-    got += chunk.length();
+    if (!len) continue;
+    size_t n = 0;
+    int val = 0, bits = -8;
+    for (size_t i = 0; i < len; i++) {
+      int v = b64value(line[i]);
+      if (v < 0) continue;  // padding
+      val = (val << 6) | v;
+      bits += 6;
+      if (bits >= 0) { bin[n++] = (uint8_t)(val >> bits); bits -= 8; }
+    }
+    len = 0;
+    ok = got + n <= total && f.write(bin, n) == n;
+    crc = esp_rom_crc32_le(crc, bin, n);
+    got += n;
+    reply("+");
     if (got >= nextDraw) {
       d.fillRect(28, 72, (int)(184ULL * got / total), 8, ui::col.accent);
       nextDraw = got + 32768;
     }
   }
   f.close();
+  free(line);
+  free(bin);
   if (got != total) {
     fs->remove(real + ".part");
     reply("error: got " + String(got) + " of " + String(total) + " bytes");
@@ -1090,9 +1127,13 @@ static void conLine(String line) {
 // "!" file commands work whenever USB serial is on; evaluating Lua needs the
 // Lua console setting.
 static void conPoll() {
+  static bool wasConnected = false;
+  bool connected = usbdev::serialConnected();
+  if (connected && !wasConnected) conBuf = "";  // new session: drop half lines from the last one
+  wasConnected = connected;
   String s = usbdev::serialRead();
   if (!s.length()) return;
-  conBuf += s;
+  addInput(conBuf, s);
   int nl;
   while ((nl = conBuf.indexOf('\n')) >= 0) {
     String line = conBuf.substring(0, nl);

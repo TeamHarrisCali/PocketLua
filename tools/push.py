@@ -26,6 +26,12 @@ def open_port(path):
     time.sleep(0.3)
     fcntl.ioctl(fd, termios.TIOCMBIS, bits)
     time.sleep(0.3)
+    # Builds before 2026-11-04 could keep a stray NUL in their input buffer,
+    # which hid every later command; over 4 KB without a newline clears it.
+    os.write(fd, b"x" * 4200)
+    time.sleep(0.3)
+    os.write(fd, b"\n")
+    time.sleep(0.3)
     termios.tcflush(fd, termios.TCIFLUSH)
     return fd
 
@@ -41,15 +47,17 @@ def read_line(fd, timeout=3.0):
 
 
 def reply_line(fd, timeout=3.0):
-    """The next line that is not a "# " log line."""
+    """The next line that is not a "# " log line (or the answer to the flush)."""
     while True:
         line = read_line(fd, timeout)
-        if not line.startswith("#"):
+        if not line.startswith("#") and not line.startswith("Lua console is off"):
             return line
 
 
 def send(fd, line):
-    os.write(fd, (line + "\n").encode())
+    b = (line + "\n").encode()
+    while b:
+        b = b[os.write(fd, b):]
 
 
 def main():
@@ -69,12 +77,32 @@ def main():
         r = reply_line(fd)
         if r != "ready":
             sys.exit(r)
-        step = 1536  # 2048 base64 characters per line
-        t0 = time.time()
-        for i in range(0, len(data), step):
+        # The device answers each line with "+" once it is on the card; wait for
+        # that, since its USB serial drops bytes when its queue is full. Builds
+        # without the "+" get smaller lines with a pause after each instead.
+        step, acked, i = 1536, None, 0  # 1536 bytes = 2048 base64 characters
+        t0, shown = time.time(), -1
+        while i < len(data):
             send(fd, base64.b64encode(data[i:i + step]).decode())
-            if i % (step * 64) == 0:
-                print(f"\r{100 * i // len(data)}%", end="", flush=True)
+            i += step
+            if acked is not False:
+                try:
+                    r = reply_line(fd, 1.0 if acked is None else 5.0)
+                except TimeoutError:
+                    if acked:
+                        sys.exit("\nthe device stopped answering")
+                    acked, step = False, 768
+                    print("(older build on the device: sending slowly)")
+                    continue
+                if r != "+":
+                    sys.exit("\n" + r)
+                acked = True
+            else:
+                time.sleep(0.03)
+            pct = 100 * min(i, len(data)) // len(data)
+            if pct != shown:
+                print(f"\r{pct}%", end="", flush=True)
+                shown = pct
         r = reply_line(fd, 30)
         expect = f"ok {remote} {len(data)} {zlib.crc32(data):x}"
         print(f"\r{r} ({time.time() - t0:.0f} s)")

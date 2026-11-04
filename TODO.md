@@ -2,6 +2,22 @@
 
 Open issues found on the device. Newest first.
 
+- [ ] **Resume here (paused 2026-11-04):** firmware over USB (`tools/deploy.sh`, `push.py send`).
+  - The device runs a debug build of `bc65456` (logs "console rx/got/reply"). It has two bugs,
+    both fixed in the code but not yet on the device:
+    1. A stray NUL in the console input buffer hid every later newline, so `!` commands were
+       read and never answered. Fixed by `addInput` in `system.cpp`.
+    2. Arduino's USB serial drops bytes when its receive queue is full, so a 2.6 MB stream
+       lost about 2 KB. Fixed: `!fput` now answers "+" after each line and the host waits for
+       it; the receive queue is 4 KB.
+  - `dist/LiveOS.bin` has both fixes, untested. Next: put it on the card once (card reader,
+    since the installed build can't receive reliably), install from M5Launcher, then test
+    `push.py send` (fast acknowledged mode) and play the test MP3 in Music.
+  - `push.py` already flushes old builds' stuck buffer (sends over 4 KB of filler first) and
+    falls back to slow paced sending when no "+" comes back.
+- [ ] USB drive sharing (Settings > USB) shows "No medium found" on the PC; not investigated.
+- [ ] MP3 playback is built (`bc65456`) but not yet heard on the device.
+
 - [ ] Mic preamp raised from +24 dB to +30 dB (`useMic` in `hw.cpp`, ES8311 register
   0x14 = 0x1A); the louder level needs a device test.
 - [ ] Not yet verified on the device: IR codes, tilt directions (Marble, Air Mouse,

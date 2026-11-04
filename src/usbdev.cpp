@@ -59,7 +59,7 @@ void begin(bool keyboard, bool drive, bool serial, bool console, bool mouseWante
   USB.manufacturerName("LiveOS");
   USB.productName("Cardputer LiveOS");
   if (cOn) {
-    cdc.setRxBufferSize(2048);  // fits one push.py line (~1 KB)
+    cdc.setRxBufferSize(4096);  // more than one push.py line (2 KB)
     cdc.begin(115200);
   }
   if (kOn) kbd.begin();
@@ -153,6 +153,8 @@ void serialWrite(const String &s) {
     off += n;
   }
 }
+
+int serialGet() { return cOn && cdc.available() > 0 ? cdc.read() : -1; }
 
 String serialRead() {
   String out;
