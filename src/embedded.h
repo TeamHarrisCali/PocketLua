@@ -4,8 +4,10 @@
 // Lua files compiled into the firmware (see tools/gen_embed.py).
 struct EmbFile {
   const char *path;
-  const unsigned char *data;
+  const unsigned char *data;  // source
   size_t len;
+  const unsigned char *code;  // stripped bytecode, or nullptr
+  size_t codeLen;
 };
 extern const EmbFile EMBEDDED[];
 extern const size_t EMBEDDED_COUNT;

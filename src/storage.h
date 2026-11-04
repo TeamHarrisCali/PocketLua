@@ -27,6 +27,9 @@ bool readText(const String &rel, String &out, bool builtinOnly = false);
 // Like readText, but built-in scripts are returned straight from flash with no
 // heap copy. `buf` only holds data when the file came from storage.
 // maxBytes > 0 reads only the start of the file.
+// Bytecode of a built-in file (see gen_embed.py), unless an edited copy in
+// storage would be loaded instead.
+bool builtinCode(const String &rel, const unsigned char *&ptr, size_t &len, bool builtinOnly = false);
 bool view(const String &rel, String &buf, const char *&ptr, size_t &len, bool builtinOnly = false,
           size_t maxBytes = 0);
 bool write(const String &rel, const String &data);

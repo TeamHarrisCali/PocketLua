@@ -20,9 +20,9 @@ static bool needScan = false;
 static volatile int pins = 0;
 static uint32_t lastUse = 0;
 
-// 4 open files: MP3 playback, plus the library rescan (old index, new index,
-// the file whose tags it reads).
-static bool sdMount() { return SD.begin(12, SPI, 25000000, "/sd", 4); }
+// 3 open files: the library rescan's old index, new index, and the file
+// whose tags it reads (playback is stopped while it runs). Each costs RAM.
+static bool sdMount() { return SD.begin(12, SPI, 25000000, "/sd", 3); }
 
 static void scanOverrides();
 
@@ -194,6 +194,18 @@ bool readText(const String &rel, String &out, bool builtinOnly) {
   bool systemFile = rel.startsWith("lib/") || rel == "boot.lua";
   if (!builtinOnly && !(safeMode && systemFile) && inStorage(rel) && readFile(realPath(rel), out)) return true;
   return readBuiltin(rel, out);
+}
+
+// The precompiled bytecode of a built-in file, when view() would load that
+// built-in (no edited copy in storage).
+bool builtinCode(const String &rel, const unsigned char *&ptr, size_t &len, bool builtinOnly) {
+  bool systemFile = rel.startsWith("lib/") || rel == "boot.lua";
+  if (!builtinOnly && !(safeMode && systemFile) && inStorage(rel)) return false;
+  const EmbFile *e = rel.startsWith("sd:") ? nullptr : findEmb(rel);
+  if (!e || !e->code) return false;
+  ptr = e->code;
+  len = e->codeLen;
+  return true;
 }
 
 bool view(const String &rel, String &buf, const char *&ptr, size_t &len, bool builtinOnly, size_t maxBytes) {

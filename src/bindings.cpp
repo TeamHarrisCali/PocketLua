@@ -284,8 +284,16 @@ bool loadChunk(lua_State *L, const String &path, bool builtinOnly, bool strip, S
   const char *p;
   size_t n;
   err = "";
-  if (!store::view(path, buf, p, n, builtinOnly)) return false;
   String chunk = "@" + path;
+  const unsigned char *code;
+  size_t codeLen;
+  // Built-ins load from precompiled bytecode (about half the RAM of compiling);
+  // with debug info wanted, or for an edited copy, from source.
+  if (strip && store::builtinCode(path, code, codeLen, builtinOnly)) {
+    if (luaL_loadbufferx(L, (const char *)code, codeLen, chunk.c_str(), "b") == LUA_OK) return true;
+    lua_pop(L, 1);
+  }
+  if (!store::view(path, buf, p, n, builtinOnly)) return false;
   if (luaL_loadbuffer(L, p, n, chunk.c_str()) != LUA_OK) {
     err = lua_tostring(L, -1);
     lua_pop(L, 1);
