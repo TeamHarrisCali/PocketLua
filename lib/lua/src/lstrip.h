@@ -1,4 +1,4 @@
-/* In-place stripping of debug information (LiveOS addition). */
+/* In-place stripping of debug information (PocketLua addition). */
 #ifndef lstrip_h
 #define lstrip_h
 

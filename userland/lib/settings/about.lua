@@ -10,7 +10,7 @@ local function about_page()
     local heap, lmem, largest = sys.heap()
     local up = sys.millis() // 1000
     return {
-      { label = "LiveOS", value = "v" .. sys.version, dim = true },
+      { label = "PocketLua", value = "v" .. sys.version, dim = true },
       { label = "Mode", value = sys.safe_mode and "Safe" or "Normal", dim = true },
       { label = "Storage", value = string.format("%s %dM free", kind, (total - used) // 1024), dim = true },
       { label = "Memory", value = string.format("%dK free (%dK blk)", heap // 1024, largest // 1024), dim = true },

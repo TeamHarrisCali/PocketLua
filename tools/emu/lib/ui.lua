@@ -1,4 +1,4 @@
--- UI toolkit: the LiveOS look. Every app draws with these pieces so the whole
+-- UI toolkit: the PocketLua look. Every app draws with these pieces so the whole
 -- system follows one theme; see docs/UI.md for the rules.
 --
 -- Screen: 240x135. Status bar y 0-13, content y 16-122, footer y 125-134.

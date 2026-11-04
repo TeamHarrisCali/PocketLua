@@ -1,4 +1,4 @@
-# LiveOS to-do
+# PocketLua to-do
 
 Open issues found on the device. Newest first.
 
@@ -19,7 +19,7 @@ Open issues found on the device. Newest first.
   270 KB of it could shrink. Also check how large an app M5Launcher accepts.
 
 - **App updates over the internet** (user idea, 2026-11-04; built as the App Store, see README): publish the apps on GitHub; on startup
-  (with Wi-Fi) LiveOS checks a manifest and downloads new or changed apps to `/liveos/apps/`, so new apps
+  (with Wi-Fi) PocketLua checks a manifest and downloads new or changed apps to `/pocketlua/apps/`, so new apps
   and fixes don't need a new firmware. Only native changes (C++) would need a firmware update.
   Notes for the design:
   - Ship apps as precompiled bytecode (`.luac` from `tools/luac32`, built by a script or GitHub

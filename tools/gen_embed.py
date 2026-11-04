@@ -83,7 +83,7 @@ def build_id():
         return (head or "unknown") + ("+" if dirty else "")
     except OSError:
         return "unknown"
-lines.append('const char LIVEOS_BUILD[] = "PLBUILD:%s";' % build_id())
+lines.append('const char POCKETLUA_BUILD[] = "PLBUILD:%s";' % build_id())
 text = "\n".join(lines) + "\n"
 
 old = None

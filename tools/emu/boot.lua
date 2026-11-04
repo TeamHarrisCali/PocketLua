@@ -1,4 +1,4 @@
--- LiveOS boot: module loader, then hand over to the shell.
+-- PocketLua boot: module loader, then hand over to the shell.
 -- Editing this file only takes effect after a reload (Ctrl+R in the editor).
 -- Hardware driver tables (audio, ir, i2c, http, lora, gps, disp) are made on
 -- first use; the shell drops them again when an app closes.

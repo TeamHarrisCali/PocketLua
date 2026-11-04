@@ -1,4 +1,4 @@
--- Files: browse LiveOS scripts and the whole SD card, open anything in the editor.
+-- Files: browse PocketLua scripts and the whole SD card, open anything in the editor.
 local col = ui.col
 
 local app = { title = "Files", icon = "folder", color = "teal", order = 2, category = "system" }
@@ -42,7 +42,7 @@ local function refresh()
     local kind = sys.storage()
     entries = { { root = "" }, { root = "sd:", off = kind ~= "SD" } }
     rows = {
-      { label = "LiveOS", value = "apps, lib, data", badge = "L", badge_color = ui.accents.purple },
+      { label = "PocketLua", value = "apps, lib, data", badge = "L", badge_color = ui.accents.purple },
       { label = "SD card", value = kind == "SD" and "all files" or "not found", badge = "S",
         badge_color = ui.accents.teal, dim = kind ~= "SD" },
     }
@@ -64,7 +64,7 @@ local function refresh()
     elseif e.name:match("%.lua$") then badge, bc = "L", ui.accents.purple end
     rows[#rows + 1] = { label = e.name .. (e.dir and "/" or ""), value = value, badge = badge, badge_color = bc }
   end
-  app.title = path == "" and "Files: LiveOS" or ("Files: " .. path)
+  app.title = path == "" and "Files: PocketLua" or ("Files: " .. path)
 end
 
 local function go(p)

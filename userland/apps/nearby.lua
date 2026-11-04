@@ -1,4 +1,4 @@
--- Nearby: other LiveOS devices that share your network key. Pick one to ping
+-- Nearby: other PocketLua devices that share your network key. Pick one to ping
 -- it, play a sound on it, read its battery, message it, or watch its tilt.
 local col = ui.col
 local dev = require("dev")

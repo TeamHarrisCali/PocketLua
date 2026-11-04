@@ -20,7 +20,7 @@ function ov.draw()
     if ampm ~= "" then ui.center(70, ampm, col.muted) end
     ui.center(82, string.format("%s, %s %d", DAYS[t.wday + 1], MONTHS[t.month], t.day), col.muted)
   else
-    ui.big(40, "LiveOS", col.accent, 3)
+    ui.big(40, "PocketLua", col.accent, 3)
     ui.center(72, "Clock not set", col.muted)
   end
   local n = shell.notes[1]

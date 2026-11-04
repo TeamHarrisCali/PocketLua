@@ -6,7 +6,7 @@ struct Tags {
   String title, artist, album, albumArtist, genre, track, disc;
 };
 
-// Reads the ID3v2 (2.2-2.4) or ID3v1 tag of a file in LiveOS storage, e.g.
+// Reads the ID3v2 (2.2-2.4) or ID3v1 tag of a file in PocketLua storage, e.g.
 // "data/music/Artist/Album/01 Song.mp3". Fields that are missing stay empty.
 bool readTags(const String &path, Tags &t);
 

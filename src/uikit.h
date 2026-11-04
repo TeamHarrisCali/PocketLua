@@ -3,7 +3,7 @@
 #include <lua.hpp>
 #include <vector>
 
-// The LiveOS look, in native code (flash, no RAM). The system draws with it
+// The PocketLua look, in native code (flash, no RAM). The system draws with it
 // directly, and apps reach the same components through the Lua `ui` table.
 // Screen 240x135: status bar y 0-13, content y 16-122, footer y 124-134.
 // All coordinates are screen coordinates; drawing is clipped to the band

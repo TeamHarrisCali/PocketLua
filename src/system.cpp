@@ -26,6 +26,7 @@ using ui::col;
 extern const char *volatile g_crumb;  // main.cpp: what the main loop is doing
 bool appstorePending();  // appstore.cpp: the App Store asked for a download
 void appstoreRun();
+void hwReleaseAudio();  // hw.cpp: speaker and mic off when idle
 
 String tlsBench();  // tlsbench.cpp: crypto speed test (USB console !bench)
 
@@ -393,15 +394,21 @@ static bool appFn(const char *fn) {
 // comes back when the app closes, however it closes.
 static bool wifiStartSvc(const String &ssid, const String &pass, bool quiet);
 static bool focusWifi = false;
+static uint32_t wifiRestoreAt = 0;  // when to turn Wi-Fi back on after focus mode (0: not pending)
+static int wifiRestoreTries = 0;
 static void focus(bool on) {
   if (on && !focusWifi && WiFi.getMode() != WIFI_OFF) {
     wifiEnable(false);
     focusWifi = true;
     usbdev::log("focus mode: wifi off");
   } else if (!on && focusWifi) {
+    // Not at once: the app's audio task and the speaker driver are still
+    // letting go of their memory. services() restarts Wi-Fi, retrying a few
+    // times, and only says so if it can't.
     focusWifi = false;
-    wifiStartSvc(cget("wifi_ssid"), cget("wifi_pass"), true);
-    usbdev::log("focus mode ended: wifi back on");
+    wifiRestoreAt = millis() + 1500;
+    wifiRestoreTries = 0;
+    usbdev::log("focus mode ended: wifi back on shortly");
   }
 }
 
@@ -433,6 +440,7 @@ static void closeApp(bool save) {
   g_displayHold = false;
   appsDirty = true;  // the app may have installed or edited apps
   focus(false);      // after vm::close(), so Wi-Fi gets the freed RAM
+  hwReleaseAudio();  // the speaker/mic drivers an app started (unless audio still plays)
 }
 
 static void fail(const String &msg) {
@@ -455,10 +463,17 @@ static void fail(const String &msg) {
 
 static void launch(const String &name, const String &path = "", int line = 0, bool returning = false);
 
+// Home: the app is closed and everything it held is released (its Lua state,
+// audio drivers); only the shell's services (clock, alarms, timers, Wi-Fi)
+// keep running. The log shows what is free, to check nothing is left behind.
 static void goHome() {
   backStack.clear();
+  bool hadApp = vm::L != nullptr;
   closeApp(true);
   screen = DESKTOP;
+  if (hadApp)
+    usbdev::log(String("home: heap free=") + freeHeap() + " largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) +
+                " arena free=" + vm::arenaFree());
 }
 
 static void back() {
@@ -525,11 +540,14 @@ static void launch(const String &name, const String &path, int line, bool return
 // ================================================================ Wi-Fi service
 static bool wifiStartSvc(const String &ssid, const String &pass, bool quiet) {
   if (WiFi.getMode() == WIFI_OFF) {
+    // make room first: idle audio drivers, Lua garbage
+    hwReleaseAudio();
     if (vm::L) lua_gc(vm::L, LUA_GCCOLLECT);
     size_t f = freeHeap();
     if (f < MIN_FREE_FOR_WIFI) {
       if (!quiet) toast(String("Not enough memory for Wi-Fi (") + (f / 1024) + "K free)", 4);
-      usbdev::log(String("wifi refused: free=") + f);
+      usbdev::log(String("wifi refused: free=") + f + " largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) +
+                  (screen == APP ? " app=" + appName : String("")));
       return false;
     }
     if (!wifiEnable(true)) {
@@ -580,7 +598,22 @@ static void wake() {
 static int dockSel = 0;
 static std::vector<String> dock() {
   std::vector<String> out;
-  String d = cget("dock", "files,notes,clock,music,settings,store");
+  // Once: a dock saved before the App Store existed gets it (in Notes' place,
+  // else the last slot); the user asked for it on the home screen.
+  if (cget("dock_store") != "1") {
+    String saved = cget("dock");
+    if (saved.length() && ("," + saved + ",").indexOf(",store,") < 0) {
+      String with = ("," + saved + ",");
+      if (with.indexOf(",notes,") >= 0) with.replace(",notes,", ",store,");
+      else {
+        int last = with.lastIndexOf(',', with.length() - 2);
+        with = with.substring(0, last + 1) + "store,";
+      }
+      cfgSet("dock", with.substring(1, with.length() - 1));
+    }
+    cfgSet("dock_store", "1");
+  }
+  String d = cget("dock", "files,clock,music,store,settings");
   int s = 0;
   while (s < (int)d.length() && out.size() < 5) {
     int e = d.indexOf(',', s);
@@ -624,7 +657,7 @@ static void drawDesktop() {
     snprintf(d, sizeof d, "%s, %s %d", DAYS[tm.tm_wday], MONTHS[tm.tm_mon], tm.tm_mday);
     ui::center(58, d, col.muted);
   } else {
-    ui::center(26, "LiveOS", col.accent, 3);
+    ui::center(26, "PocketLua", col.accent, 3);
     ui::center(58, "Set the clock: connect to Wi-Fi", col.muted);
   }
   // one quiet line of status: next alarm, notifications, timers
@@ -917,7 +950,7 @@ static void drawLock() {
     snprintf(d, sizeof d, "%s, %s %d", DAYS[tm.tm_wday], MONTHS[tm.tm_mon], tm.tm_mday);
     ui::center(78, d, col.muted);
   } else {
-    ui::center(40, "LiveOS", col.accent, 3);
+    ui::center(40, "PocketLua", col.accent, 3);
   }
   if (!notes.empty() && ui::status.unread) {
     ui::card(20, 94, 200, 16, false);
@@ -1281,6 +1314,17 @@ static bool synced = false, warnedLow = false;
 static float serviceAcc = 1;
 
 static void services() {
+  if (wifiRestoreAt && (int32_t)(millis() - wifiRestoreAt) >= 0) {
+    if (WiFi.getMode() != WIFI_OFF || wifiStartSvc(cget("wifi_ssid"), cget("wifi_pass"), true)) {
+      wifiRestoreAt = 0;
+      usbdev::log("wifi restored after focus mode");
+    } else if (++wifiRestoreTries < 5) {
+      wifiRestoreAt = millis() + 3000;
+    } else {
+      wifiRestoreAt = 0;
+      toast("Wi-Fi couldn't restart: not enough memory", 4);
+    }
+  }
   int pct;
   bool chg;
   batteryInfo(pct, chg);
@@ -1379,7 +1423,7 @@ void update(float dt) {
 
 void drawBand() {
   canvas.fillSprite(col.bg);
-  String title = "LiveOS";
+  String title = "PocketLua";
   switch (screen) {
     case DESKTOP: drawDesktop(); break;
     case DRAWER:

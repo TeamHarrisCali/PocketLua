@@ -1,5 +1,5 @@
 /*
-** In-place stripping of debug information (LiveOS addition, not part of Lua).
+** In-place stripping of debug information (PocketLua addition, not part of Lua).
 ** Frees line info, local variable names and upvalue names of a compiled
 ** chunk without dumping and reloading it, so no large temporary buffer is
 ** needed (the dump/reload approach failed on a fragmented heap).

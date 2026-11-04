@@ -48,9 +48,9 @@ static int ml_info(lua_State *L) {
   int n = f.read((uint8_t *)buf, sizeof buf - 1);
   f.close();
   buf[n > 0 ? n : 0] = 0;
-  if (strncmp(buf, "liveos-library 1\n", 17)) { lua_pushnil(L); return 1; }
+  if (strncmp(buf, "pocketlua-library 1\n", 20) && strncmp(buf, "liveos-library 1\n", 17)) { lua_pushnil(L); return 1; }
   lua_newtable(L);
-  for (char *line = strtok(buf + 17, "\n"); line; line = strtok(nullptr, "\n")) {
+  for (char *line = strtok(strchr(buf, '\n') + 1, "\n"); line; line = strtok(nullptr, "\n")) {  // after the header line
     char *sp = strchr(line, ' ');
     if (!sp) continue;
     *sp = 0;
@@ -587,7 +587,7 @@ static void scanTask(void *) {
     }
     File info = fs->open(libDir + "/info.txt", "w");
     if (info) {
-      info.printf("liveos-library 1\ntracks %u\nartists %u\nalbums %u\ngenres %u\n", (unsigned)n, (unsigned)nArtists,
+      info.printf("pocketlua-library 1\ntracks %u\nartists %u\nalbums %u\ngenres %u\n", (unsigned)n, (unsigned)nArtists,
                   (unsigned)nAlbums, (unsigned)nGenres);
       info.close();
     }

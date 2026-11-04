@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Talk to a LiveOS device over USB serial (Serial port on in Settings > USB;
+"""Talk to a PocketLua device over USB serial (Serial port on in Settings > USB;
 eval also needs the Lua console). Standard library only.
 
-  push.py send dist/LiveOS.bin LiveOS.bin    (large files, streamed to the card)
+  push.py send dist/PocketLua.bin PocketLua.bin    (large files, streamed to the card)
   push.py put userland/apps/foo.lua apps/foo.lua [--run foo]
   push.py get apps/foo.lua local_copy.lua
   push.py eval "sys.heap()"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Make a LiveOS-playable copy of a music library (needs ffmpeg).
+"""Make a PocketLua-playable copy of a music library (needs ffmpeg).
 
   convert_music.py ~/Music /run/media/$USER/CARD/pocketlua/data/music [--bitrate 128k] [--jobs 4]
 

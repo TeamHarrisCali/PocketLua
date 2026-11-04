@@ -636,6 +636,15 @@ void hwTick() {
   if (aMode == A_IDLE && micRx && millis() - micLastUse > 4000) micClose();
 }
 
+// Frees the speaker and mic drivers when nothing is playing or recording
+// (their DMA buffers and task hold over 10 KB): the shell calls this before
+// starting Wi-Fi, which needs every KB it can get.
+void hwReleaseAudio() {
+  if (aMode != A_IDLE) return;
+  if (M5Cardputer.Speaker.isRunning()) M5Cardputer.Speaker.end();
+  micClose();
+}
+
 // Shared by snd.tone in bindings.cpp. False while recording: the speaker would
 // take the mic's pins and end the recording.
 bool hwUseSpeaker() {
@@ -727,7 +736,7 @@ static int ht_get(lua_State *L) {
   WiFiClient client;
   HTTPClient http;
   http.setTimeout(5000);
-  http.setUserAgent("LiveOS-Cardputer");
+  http.setUserAgent("PocketLua-Cardputer");
   if (!http.begin(client, url)) { lua_pushnil(L); lua_pushstring(L, "bad url"); return 2; }
   int code = http.GET();
   if (code <= 0) {
@@ -766,7 +775,7 @@ static int ht_download(lua_State *L) {
   WiFiClient client;
   HTTPClient http;
   http.setTimeout(5000);
-  http.setUserAgent("LiveOS-Cardputer");
+  http.setUserAgent("PocketLua-Cardputer");
   if (!http.begin(client, url)) { lua_pushnil(L); lua_pushstring(L, "bad url"); return 2; }
   int code = http.GET();
   if (code <= 0) {

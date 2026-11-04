@@ -342,7 +342,7 @@ String status(const Entry &e) {
 }
 
 String running() {
-  String b = LIVEOS_BUILD + 8;
+  String b = POCKETLUA_BUILD + 8;
   if (b.endsWith("+")) b.remove(b.length() - 1);
   return b;
 }

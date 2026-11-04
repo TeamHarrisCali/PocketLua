@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print the LiveOS device log from the USB serial port (stdlib only).
+"""Print the PocketLua device log from the USB serial port (stdlib only).
 
   monitor.py                 follow the log until Ctrl+C
   monitor.py --seconds 15    capture for 15 seconds, then exit
@@ -17,7 +17,7 @@ def main():
     a = ap.parse_args()
     port = a.port or (sorted(glob.glob("/dev/ttyACM*")) or [None])[0]
     if not port:
-        sys.exit("no /dev/ttyACM* device found (is the Cardputer plugged in and running LiveOS?)")
+        sys.exit("no /dev/ttyACM* device found (is the Cardputer plugged in and running PocketLua?)")
     fd = os.open(port, os.O_RDWR | os.O_NOCTTY)
     attrs = termios.tcgetattr(fd)
     attrs[0] = attrs[1] = attrs[3] = 0

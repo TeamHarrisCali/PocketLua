@@ -24,7 +24,7 @@ extern M5Canvas canvas;
 // ---------------------------------------------------------------- settings
 // Settings live in data/settings.txt (key=value lines), cached in RAM and
 // written 2 s after the last change. They used to be in NVS, the chip's small
-// settings partition shared with M5Launcher and Wi-Fi; LiveOS filled it and
+// settings partition shared with M5Launcher and Wi-Fi; PocketLua filled it and
 // Wi-Fi could no longer start (ESP_ERR_NVS_NOT_ENOUGH_SPACE).
 static const char *SETTINGS_FILE = "data/settings.txt";
 static std::vector<std::pair<String, String>> settings;

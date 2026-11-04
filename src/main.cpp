@@ -1,4 +1,4 @@
-// LiveOS for the Cardputer ADV. The OS itself (desktop, drawer, system UI,
+// PocketLua for the Cardputer ADV. The OS itself (desktop, drawer, system UI,
 // services) is native code in system.cpp; apps are live-editable Lua that
 // runs in a VM created only while the app is open (vm.cpp).
 // Runs as a normal app image, so M5Launcher can start it.
@@ -212,7 +212,7 @@ static void splash() {
   d.fillScreen(TFT_BLACK);
   d.setTextColor(d.color565(64, 140, 255));
   d.setTextSize(3);
-  d.drawString("LiveOS", 56, 40);
+  d.drawCentreString("PocketLua", 120, 40);
   d.setTextSize(1);
   d.setTextColor(d.color565(130, 138, 156));
   d.drawString("hold S for safe mode", 66, 90);
@@ -263,7 +263,7 @@ static void osMain() {
       usbdev::log(String("previous run: main loop stuck 30 s at: ") + stuckAt + ", restarted");
       stuckMagic = 0;
     }
-    usbdev::log(String("PocketLua boot, build ") + (LIVEOS_BUILD + 8) + ", storage=" + store::kind() + ", embedded files=" + (int)EMBEDDED_COUNT +
+    usbdev::log(String("PocketLua boot, build ") + (POCKETLUA_BUILD + 8) + ", storage=" + store::kind() + ", embedded files=" + (int)EMBEDDED_COUNT +
                 ", board=" + (int)M5.getBoard() + (M5.getBoard() == m5::board_t::board_M5CardputerADV ? " (ADV)" : ""));
   }
   bool safe = false;

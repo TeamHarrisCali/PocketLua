@@ -1,10 +1,10 @@
 # PocketLua for the Cardputer ADV
 
-A live-editable OS for the M5Stack Cardputer ADV. The C++ core owns the hardware and a Lua 5.4 VM; apps are Lua scripts you can edit on the device. (It began as "LiveOS"; some file names still say so.)
+A live-editable OS for the M5Stack Cardputer ADV. The C++ core owns the hardware and a Lua 5.4 VM; apps are Lua scripts you can edit on the device. (It began as "LiveOS": the card folder `/liveos/` is renamed to `/pocketlua/` at first boot.)
 
 ## Install (M5Launcher)
 
-Copy the firmware (`dist/LiveOS.bin`, or `PocketLua.bin` from the App Store) to the SD card and install it from M5Launcher. It is a plain app image, so Launcher is untouched.
+Copy the firmware (`dist/PocketLua.bin`, or `PocketLua.bin` from the App Store) to the SD card and install it from M5Launcher. It is a plain app image, so Launcher is untouched.
 
 The firmware holds only the core: Settings, the App Store and the editor. Every other app comes from the **App Store**, which downloads from this repository's `release/` folder over HTTPS (BearSSL, checked against ISRG Root X1) with the store app closed, verifies each file's SHA-256, and keeps the previous copy. Nothing updates by itself: press C in the store to check.
 
@@ -64,7 +64,7 @@ The board has about 250 KB of usable RAM and no PSRAM. Only a small core is alwa
 
 ## Live editing and recovery
 
-Scripts are built into the firmware and can be overridden by files in `/liveos/` on the SD card. Saving in the editor writes the override, so a change takes effect at once, and in Files `X` on an "edited" file reverts it. If an edited system file fails to load, the built-in copy is used and you are told. A script that never returns is stopped after 2.5 s.
+Scripts are built into the firmware and can be overridden by files in `/pocketlua/` on the SD card. Saving in the editor writes the override, so a change takes effect at once, and in Files `X` on an "edited" file reverts it. If an edited system file fails to load, the built-in copy is used and you are told. A script that never returns is stopped after 2.5 s.
 
 ## USB (Settings > USB, applies after a reboot)
 

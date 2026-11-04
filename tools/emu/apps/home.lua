@@ -5,7 +5,7 @@
 --   Ctrl+E           edit the app's source        Ctrl+N   new app
 local col = ui.col
 
-local app = { title = "LiveOS", icon = "app", hidden = true }
+local app = { title = "PocketLua", icon = "app", hidden = true }
 
 local CATS = { "all", "system", "tools", "media", "games", "net" }
 local LABELS = { "All", "Sys", "Tools", "Media", "Games", "Net" }

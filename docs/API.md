@@ -1,4 +1,4 @@
-# LiveOS Lua API
+# PocketLua Lua API
 
 Apps are Lua 5.4 files in `userland/apps/<name>.lua`. Numbers are 32-bit (floats are single precision), and there is no `io`, `os` or `debug` library.
 
@@ -30,7 +30,7 @@ return app
 | `sys.millis()` | Milliseconds since boot |
 | `sys.heap()` | Free bytes, Lua bytes, largest block, total |
 | `sys.battery()` | Percent, charging |
-| `sys.read_text(path[, max])` | File contents or `nil`. Paths are LiveOS-relative (`data/x.txt`, stored in `/pocketlua/` on the card); write only there, `sd:/...` is for reading the user's own files |
+| `sys.read_text(path[, max])` | File contents or `nil`. Paths are PocketLua-relative (`data/x.txt`, stored in `/pocketlua/` on the card); write only there, `sd:/...` is for reading the user's own files |
 | `sys.write_text(path, s)` | Writes atomically (temp file, then rename) |
 | `sys.append_text(path, s)` | Appends without reading the file (logs, tracks) |
 | `sys.rename(from, to)` | Moves a file, replacing the destination |
@@ -108,7 +108,7 @@ The mic and speaker cannot run at the same time; the drivers switch between them
 | `lora.send(s)`, `lora.recv()` | Send; receive `{data, rssi, snr}` or nil. Call `recv()` every frame |
 | `lora.busy()`, `lora.stop()` | Transmit in progress; shut the radio down |
 | `gps.start()`, `gps.read()`, `gps.stop()` | GPS on the Cap LoRa-1262. `read()` gives `{valid, lat, lon, alt, sats, hdop, speed, course, time, date, chars}` |
-| `dev.mount(name)` | Use another LiveOS device's hardware (see lib/dev.lua) |
+| `dev.mount(name)` | Use another PocketLua device's hardware (see lib/dev.lua) |
 
 ## Shell services
 

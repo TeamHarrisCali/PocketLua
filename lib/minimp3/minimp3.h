@@ -234,7 +234,7 @@ typedef struct
     bs_t bs;
     uint8_t maindata[MAX_BITRESERVOIR_BYTES + MAX_L3_FRAME_PAYLOAD_BYTES];
     L3_gr_info_t gr_info[4];
-#ifdef MINIMP3_SCRATCH  /* LiveOS: the two big arrays live in their own heap blocks (8.4 + 4.6 KB) */
+#ifdef MINIMP3_SCRATCH  /* PocketLua: the two big arrays live in their own heap blocks (8.4 + 4.6 KB) */
     float (*grbuf)[576], scf[40], (*syn)[2*32];
 #else
     float grbuf[2][576], scf[40], syn[18 + 15][2*32];
@@ -1719,7 +1719,7 @@ int mp3dec_decode_frame(mp3dec_t *dec, const uint8_t *mp3, int mp3_bytes, mp3d_s
     int i = 0, igr, frame_size = 0, success = 1;
     const uint8_t *hdr;
     bs_t bs_frame[1];
-#ifdef MINIMP3_SCRATCH  /* LiveOS: ~15 KB scratch from the heap instead of the stack (C++ only) */
+#ifdef MINIMP3_SCRATCH  /* PocketLua: ~15 KB scratch from the heap instead of the stack (C++ only) */
     mp3dec_scratch_t &scratch = *(mp3dec_scratch_t *)MINIMP3_SCRATCH;
 #else
     mp3dec_scratch_t scratch;

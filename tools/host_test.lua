@@ -265,7 +265,7 @@ shell.home(); frames(2)
 
 -- ------------------------------------------------------------ files
 shell.launch("files"); frames(2)
-key("enter")             -- LiveOS
+key("enter")             -- PocketLua
 key("enter")             -- first entry (..) goes back
 key("down"); key("enter")
 check(shell.app() ~= "error", "files browse")

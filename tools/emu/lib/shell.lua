@@ -1,4 +1,4 @@
--- LiveOS shell: the small part of the system that is always in memory. It runs
+-- PocketLua shell: the small part of the system that is always in memory. It runs
 -- one app at a time, routes keys, draws the status bar and toasts, and runs the
 -- background services (battery, clock, Wi-Fi, console, device sharing).
 -- Everything else, including the home screen, dialogs and icons, is loaded when
@@ -555,7 +555,7 @@ function on_draw()
   gfx.clear(col.bg)
   if current and current.draw then guard(current.draw) end
   gfx.noclip()
-  local title = current and (current.title or current_name) or "LiveOS"
+  local title = current and (current.title or current_name) or "PocketLua"
   if sys.safe_mode then title = "SAFE MODE - " .. title end
   ui.statusbar(title)
   if overlay then

@@ -3,3 +3,4 @@
 dist/*.bin
 /
 src/embedded_files.gen.cpp
+__pycache__/

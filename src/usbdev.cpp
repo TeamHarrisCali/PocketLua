@@ -56,8 +56,8 @@ void begin(bool keyboard, bool drive, bool serial, bool console, bool mouseWante
   cOn = serial;
   if (!kOn && !mOn && !cOn && !msOn) return;
 
-  USB.manufacturerName("LiveOS");
-  USB.productName("Cardputer LiveOS");
+  USB.manufacturerName("PocketLua");
+  USB.productName("Cardputer PocketLua");
   if (cOn) {
     cdc.setRxBufferSize(4096);  // more than one push.py line (2 KB)
     cdc.begin(115200);
@@ -65,7 +65,7 @@ void begin(bool keyboard, bool drive, bool serial, bool console, bool mouseWante
   if (kOn) kbd.begin();
   if (msOn) mouse.begin();
   if (mOn) {
-    msc.vendorID("LiveOS");
+    msc.vendorID("PocketLua");
     msc.productID("SD Card");
     msc.productRevision("1.0");
     msc.onRead(onRead);

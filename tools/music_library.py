@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the Music app's library index for a LiveOS music folder (needs ffprobe).
+"""Build the Music app's library index for a PocketLua music folder (needs ffprobe).
 
   music_library.py /run/media/$USER/CARD/pocketlua/data/music
 
@@ -8,7 +8,7 @@ Reads the tags of every MP3/WAV under the folder and writes the index to
 lists are built here, already sorted, as fixed-size text records: the device
 reads only the rows on screen by seeking to row * size.
 
-  info.txt     "liveos-library 1" and counts
+  info.txt     "pocketlua-library 1" and counts
   tracks.dat   512 B: path \t title \t artist \t album \t genre \t track \t album artist \t disc
                sorted by album artist, album, disc, track, title
   artists.dat  128 B: name \t first track \t count       (tracks are contiguous)
@@ -129,7 +129,7 @@ def main():
         gtracks += [f"{i:07d}\n".encode() for i in idx]
     write("genres.dat", genres)
     write("gtracks.dat", gtracks)
-    write("info.txt", [f"liveos-library 1\ntracks {len(tracks)}\nartists {len(artists)}\nalbums {len(albums)}\n"
+    write("info.txt", [f"pocketlua-library 1\ntracks {len(tracks)}\nartists {len(artists)}\nalbums {len(albums)}\n"
                        f"genres {len(genres)}\n".encode()])
 
     print(f"{len(tracks)} tracks, {len(artists)} artists, {len(albums)} albums, {len(genres)} genres -> {out}")
