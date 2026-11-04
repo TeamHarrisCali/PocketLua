@@ -1,6 +1,7 @@
 #include "bindings.h"
 #include <M5Cardputer.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include <Preferences.h>
 #include <time.h>
 #include <math.h>
@@ -10,6 +11,9 @@
 #include "mesh.h"
 #include "system.h"
 #include "vm.h"
+extern "C" {
+#include "lstrip.h"
+}
 
 extern M5Canvas canvas;
 static Preferences cfgPrefs;
@@ -167,10 +171,6 @@ static int y_read_text(lua_State *L) {
   lua_pushlstring(L, p, n);
   return 1;
 }
-static int dumpWriter(lua_State *, const void *p, size_t sz, void *ud) {
-  luaL_addlstring((luaL_Buffer *)ud, (const char *)p, sz);
-  return 0;
-}
 
 // Compiles a script straight from flash or SD so its source text never has to
 // be copied into the Lua heap. Returns the chunk, or nil + error (nil alone
@@ -189,23 +189,7 @@ bool loadChunk(lua_State *L, const String &path, bool builtinOnly, bool strip, S
     lua_pop(L, 1);
     return false;
   }
-  if (strip) {
-    int fn = lua_gettop(L);
-    luaL_Buffer b;
-    luaL_buffinit(L, &b);
-    lua_pushvalue(L, fn);  // lua_dump works on the top of the stack
-    lua_dump(L, dumpWriter, &b, 1);
-    lua_pop(L, 1);
-    luaL_pushresult(&b);
-    size_t bn;
-    const char *bin = lua_tolstring(L, -1, &bn);
-    if (luaL_loadbuffer(L, bin, bn, chunk.c_str()) == LUA_OK) {
-      lua_replace(L, fn);   // stripped chunk replaces the original
-      lua_settop(L, fn);
-    } else {
-      lua_settop(L, fn);    // keep the unstripped chunk
-    }
-  }
+  if (strip) lua_stripdebug(L);  // in place: no dump buffer (see lstrip.c)
   return true;
 }
 
@@ -302,9 +286,19 @@ static uint32_t wifiStart = 0;
 bool wifiEnable(bool on) {
   if (on) {
     size_t before = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     bool ok = WiFi.mode(WIFI_STA) && WiFi.getMode() != WIFI_OFF;
-    usbdev::log(String("wifi start ") + (ok ? "ok" : "FAILED") + ": free before=" + before +
+    usbdev::log(String("wifi start ") + (ok ? "ok" : "FAILED") + ": free before=" + before + " largest=" + largest +
                 " after=" + heap_caps_get_free_size(MALLOC_CAP_8BIT));
+    if (!ok) {
+      // The core only says yes/no; ask the driver directly for the reason.
+      wifi_init_config_t c = WIFI_INIT_CONFIG_DEFAULT();
+      esp_err_t e = esp_wifi_init(&c);
+      usbdev::log(String("wifi diag: esp_wifi_init=") + esp_err_to_name(e) +
+                  " internal_free=" + heap_caps_get_free_size(MALLOC_CAP_INTERNAL) +
+                  " dma_largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+      if (e == ESP_OK) esp_wifi_deinit();
+    }
     return ok;
   }
   wifiConnecting = false;
