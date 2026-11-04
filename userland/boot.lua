@@ -1,5 +1,19 @@
 -- LiveOS boot: module loader, then hand over to the shell.
 -- Editing this file only takes effect after a reload (Ctrl+R in the editor).
+-- Hardware driver tables (audio, ir, i2c, http, lora, gps, disp) are made on
+-- first use; the shell drops them again when an app closes.
+local HW = { audio = true, ir = true, i2c = true, http = true, lora = true, gps = true, disp = true }
+setmetatable(_G, { __index = function(t, k)
+  if HW[k] then
+    local lib = sys.hwlib(k)
+    rawset(t, k, lib)
+    return lib
+  end
+end })
+function release_hw()
+  for k in pairs(HW) do rawset(_G, k, nil) end
+end
+
 local loaded = {}
 local sizes = {}    -- approximate KB each module holds, for Task Manager
 _G.boot_notes = {}  -- shown to the user by the shell

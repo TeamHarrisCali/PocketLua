@@ -14,6 +14,43 @@ static bool sdOk = false;
 static bool locked = false;
 static const char *ROOT = "/liveos";
 
+// The SD card driver holds ~18 KB of RAM while mounted, so the card is mounted
+// only while files are being used and unmounted after IDLE_MS (see idleTick).
+// Long users (audio streaming, USB sharing) pin it.
+static bool mounted = false;
+static bool needScan = false;
+static volatile int pins = 0;
+static uint32_t lastUse = 0;
+static const uint32_t IDLE_MS = 4000;
+
+static bool sdMount() { return SD.begin(12, SPI, 25000000, "/sd", 2); }
+
+static void scanOverrides();
+
+// The filesystem, mounting the SD card first when needed.
+static fs::FS *use() {
+  if (!fsys) return nullptr;
+  lastUse = millis();
+  if (sdOk && !mounted) {
+    if (!sdMount()) return nullptr;
+    mounted = true;
+    if (needScan) scanOverrides();
+  }
+  return fsys;
+}
+
+void idleTick() {
+  if (sdOk && mounted && pins == 0 && !locked && millis() - lastUse > IDLE_MS) {
+    SD.end();
+    mounted = false;
+  }
+}
+
+void pin(bool on) {
+  if (on) { pins = pins + 1; use(); }
+  else if (pins > 0) { pins = pins - 1; lastUse = millis(); }
+}
+
 static bool badPath(const String &p) { return p.indexOf("..") >= 0 || p.indexOf('\\') >= 0; }
 
 // Maps a script-visible path to a real path. Empty string means rejected.
@@ -35,17 +72,78 @@ static const EmbFile *findEmb(const String &rel) {
   return nullptr;
 }
 
+// Stored copies of scripts (apps/, lib/, boot.lua), kept in RAM so that
+// loading built-in scripts and drawing the home screen never mount the card.
+struct Override {
+  String path;
+  size_t size;
+};
+static std::vector<Override> overrides;
+
+static bool isScript(const String &rel) {
+  return rel == "boot.lua" || rel.startsWith("apps/") || rel.startsWith("lib/");
+}
+
+static Override *findOverride(const String &rel) {
+  for (auto &o : overrides)
+    if (o.path == rel) return &o;
+  return nullptr;
+}
+
+static void setOverride(const String &rel, size_t size) {
+  if (!isScript(rel)) return;
+  Override *o = findOverride(rel);
+  if (o) o->size = size;
+  else overrides.push_back({rel, size});
+}
+
+static void dropOverrides(const String &rel) {
+  for (size_t i = overrides.size(); i-- > 0;)
+    if (overrides[i].path == rel || overrides[i].path.startsWith(rel + "/")) overrides.erase(overrides.begin() + i);
+}
+
+static void scanDir(const String &rel) {
+  File d = fsys->open(realPath(rel));
+  if (!d || !d.isDirectory()) return;
+  File e;
+  while ((e = d.openNextFile())) {
+    String n = e.name();
+    int s = n.lastIndexOf('/');
+    if (s >= 0) n = n.substring(s + 1);
+    bool dir = e.isDirectory();
+    size_t size = e.size();
+    e.close();
+    if (n.startsWith(".") || n.endsWith(".tmp")) continue;
+    if (dir) scanDir(rel + "/" + n);
+    else overrides.push_back({rel + "/" + n, size});
+  }
+  d.close();
+}
+
+static void scanOverrides() {
+  needScan = false;
+  overrides.clear();
+  scanDir("apps");
+  scanDir("lib");
+  File b = fsys->open(realPath("boot.lua"));
+  if (b && !b.isDirectory()) overrides.push_back({"boot.lua", (size_t)b.size()});
+  if (b) b.close();
+}
+
 bool begin() {
   SPI.begin(40, 39, 14, 12);
-  if (SD.begin(12, SPI, 25000000, "/sd", 2)) {
+  if (sdMount()) {
     fsys = &SD;
     sdOk = true;
+    mounted = true;
   } else if (LittleFS.begin(true)) {
     fsys = &LittleFS;
   } else {
     return false;
   }
   if (!fsys->exists(ROOT)) fsys->mkdir(ROOT);
+  scanOverrides();
+  lastUse = millis();  // idleTick unmounts the card a few seconds after boot
   return true;
 }
 
@@ -55,8 +153,11 @@ bool hasSd() { return sdOk; }
 bool embedded(const String &rel) { return !rel.startsWith("sd:") && findEmb(rel) != nullptr; }
 
 bool inStorage(const String &rel) {
+  if (locked) return false;
+  if (!rel.startsWith("sd:") && isScript(rel)) return findOverride(rel) != nullptr;
+  fs::FS *fs = use();
   String p = realPath(rel);
-  return fsys && p.length() && fsys->exists(p);
+  return fs && p.length() && fs->exists(p);
 }
 
 bool exists(const String &rel) { return inStorage(rel) || embedded(rel); }
@@ -64,6 +165,7 @@ bool exists(const String &rel) { return inStorage(rel) || embedded(rel); }
 // Reads a whole file in blocks. (Stream::readString() waits a full second at
 // the end of every file, which stalls boot and can trip the script time limit.)
 static bool readFile(const String &path, String &out, size_t maxBytes = 0) {
+  if (!use()) return false;
   File f = fsys->open(path, "r");
   if (!f || f.isDirectory()) return false;
   size_t size = f.size();
@@ -114,7 +216,7 @@ bool view(const String &rel, String &buf, const char *&ptr, size_t &len, bool bu
 
 bool mkdirs(const String &rel) {
   String p = realPath(rel);
-  if (!fsys || !p.length()) return false;
+  if (!use() || !p.length()) return false;
   for (int i = 1; i <= (int)p.length(); i++) {
     if (i == (int)p.length() || p[i] == '/') {
       String part = p.substring(0, i);
@@ -126,7 +228,7 @@ bool mkdirs(const String &rel) {
 
 bool write(const String &rel, const String &data) {
   String p = realPath(rel);
-  if (!fsys || !p.length()) return false;
+  if (!use() || !p.length()) return false;
   int slash = p.lastIndexOf('/');
   if (rel.startsWith("sd:")) {
     if (slash > 0) mkdirs("sd:" + p.substring(0, slash));
@@ -145,13 +247,17 @@ bool write(const String &rel, const String &data) {
     return false;
   }
   if (fsys->exists(p)) fsys->remove(p);
-  if (fsys->rename(tmp, p)) return true;
+  if (fsys->rename(tmp, p)) {
+    setOverride(rel, data.length());
+    return true;
+  }
   // rename failed: fall back to writing in place (we still hold the data)
   fsys->remove(tmp);
   File g = fsys->open(p, "w");
   if (!g) return false;
   size_t m = g.write((const uint8_t *)data.c_str(), data.length());
   g.close();
+  if (m == data.length()) setOverride(rel, m);
   return m == data.length();
 }
 
@@ -162,7 +268,9 @@ bool append(const String &rel, const char *data, size_t len) {
   File f = fs->open(real, "a");
   if (!f) return false;
   size_t n = f.write((const uint8_t *)data, len);
+  size_t total = f.size();
   f.close();
+  if (n == len) setOverride(rel, total);
   return n == len;
 }
 
@@ -172,16 +280,24 @@ bool rename(const String &from, const String &to) {
   fs::FS *fb = resolve(to, b, true);
   if (!fa || fa != fb || !fa->exists(a)) return false;
   if (fb->exists(b)) fb->remove(b);
-  return fa->rename(a, b);
+  if (!fa->rename(a, b)) return false;
+  File f = fa->open(b);
+  size_t size = f ? f.size() : 0;
+  if (f) f.close();
+  dropOverrides(from);
+  setOverride(to, size);
+  return true;
 }
 
 bool remove(const String &rel) {
   String p = realPath(rel);
-  if (!fsys || !p.length() || !fsys->exists(p)) return false;
+  if (!use() || !p.length() || !fsys->exists(p)) return false;
   File f = fsys->open(p);
   bool isDir = f.isDirectory();
   f.close();
-  return isDir ? fsys->rmdir(p) : fsys->remove(p);
+  bool ok = isDir ? fsys->rmdir(p) : fsys->remove(p);
+  if (ok) dropOverrides(rel);
+  return ok;
 }
 
 std::vector<Entry> list(const String &dirIn) {
@@ -198,7 +314,16 @@ std::vector<Entry> list(const String &dirIn) {
     return nullptr;
   };
 
-  if (fsys) {
+  bool scriptDir = !raw && (dir == "apps" || dir == "lib" || dir.startsWith("lib/"));
+  if (scriptDir && !locked) {
+    for (auto &o : overrides) {
+      if (!o.path.startsWith(prefix)) continue;
+      String rest = o.path.substring(prefix.length());
+      int s = rest.indexOf('/');
+      String name = s >= 0 ? rest.substring(0, s) : rest;
+      if (!find(name)) out.push_back({name, s >= 0, true, false, s >= 0 ? 0 : o.size});
+    }
+  } else if (use()) {
     String p = realPath(dir.length() ? dir : "");
     if (raw && (dir == "sd:" || dir == "sd:/")) p = "/";
     if (p.length() && fsys->exists(p)) {
@@ -247,7 +372,7 @@ void lock(bool on) { locked = on; }
 
 fs::FS *resolve(const String &rel, String &real, bool forWrite) {
   real = realPath(rel);
-  if (!fsys || !real.length()) return nullptr;
+  if (!real.length() || !use()) return nullptr;
   if (forWrite) {
     int slash = real.lastIndexOf('/');
     if (slash > 0) {
@@ -262,15 +387,18 @@ fs::FS *resolve(const String &rel, String &real, bool forWrite) {
   return fsys;
 }
 
+// After USB sharing: the computer may have changed files, so unmount, and
+// rescan the overrides on the next mount.
 bool remount() {
   if (!sdOk) return false;
-  SD.end();
-  delay(50);
+  if (mounted) SD.end();
+  mounted = false;
   locked = false;
-  return SD.begin(12, SPI, 25000000, "/sd", 2);
+  needScan = true;
+  return true;
 }
 
-uint64_t totalBytes() { return sdOk ? SD.totalBytes() : LittleFS.totalBytes(); }
-uint64_t usedBytes() { return sdOk ? SD.usedBytes() : LittleFS.usedBytes(); }
+uint64_t totalBytes() { use(); return sdOk ? SD.totalBytes() : LittleFS.totalBytes(); }
+uint64_t usedBytes() { use(); return sdOk ? SD.usedBytes() : LittleFS.usedBytes(); }
 
 }  // namespace store

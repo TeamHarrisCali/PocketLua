@@ -78,6 +78,7 @@ static void recTask(void *) {
   free(buf[0]);
   free(buf[1]);
   M5Cardputer.Mic.end();
+  store::pin(false);
   aMode = A_IDLE;
   aTask = nullptr;
   vTaskDelete(nullptr);
@@ -102,6 +103,7 @@ static void playTask(void *) {
   aFile.close();
   free(buf[0]);
   free(buf[1]);
+  store::pin(false);
   aMode = A_IDLE;
   aTask = nullptr;
   vTaskDelete(nullptr);
@@ -115,6 +117,7 @@ static int au_record(lua_State *L) {
   if (!fs || !(aFile = fs->open(real, "w"))) { lua_pushboolean(L, 0); return 1; }
   uint8_t h[44] = {0};
   aFile.write(h, 44);
+  store::pin(true);
   useMic(aRate);
   aSamples = 0;
   aStop = false;
@@ -160,6 +163,7 @@ static int au_play(lua_State *L) {
   aStereo = ch == 2;
   aTotal = dataLen / 2 / ch;
   aSamples = 0;
+  store::pin(true);
   useSpeaker();
   aStop = false;
   aMode = A_PLAY;
@@ -571,22 +575,34 @@ static int di_text(lua_State *L) {
 }
 
 // =============================================================== registration
+// Hardware tables are created on first use (see boot.lua's _G metatable) and
+// dropped when an app closes, so their ~40 entries cost nothing until needed.
+static const luaL_Reg audioLib[] = {{"record", au_record}, {"play", au_play}, {"stop", au_stop},
+                                    {"status", au_status}, {"analyze", au_analyze}, {nullptr, nullptr}};
+static const luaL_Reg irLib[] = {{"send", ir_send}, {nullptr, nullptr}};
+static const luaL_Reg i2cLib[] = {{"scan", i2_scan}, {"read", i2_read}, {"write", i2_write},
+                                  {"read_reg", i2_read_reg}, {"write_reg", i2_write_reg}, {nullptr, nullptr}};
+static const luaL_Reg httpLib[] = {{"get", ht_get}, {"download", ht_download}, {"dns", ht_dns}, {"ping", ht_ping}, {nullptr, nullptr}};
+static const luaL_Reg loraLib[] = {{"begin", lo_begin}, {"send", lo_send}, {"recv", lo_recv},
+                                   {"busy", lo_busy}, {"stop", lo_stop}, {nullptr, nullptr}};
+static const luaL_Reg gpsLib[] = {{"start", gp_start}, {"stop", gp_stop}, {"read", gp_read}, {nullptr, nullptr}};
+static const luaL_Reg dispLib[] = {{"image", di_image}, {"fill", di_fill}, {"text", di_text}, {nullptr, nullptr}};
+static const struct { const char *name; const luaL_Reg *fns; } HW_LIBS[] = {
+    {"audio", audioLib}, {"ir", irLib}, {"i2c", i2cLib}, {"http", httpLib},
+    {"lora", loraLib}, {"gps", gpsLib}, {"disp", dispLib}};
+
+// sys.hwlib(name) -> the table for that driver, or nil
+static int hw_lib(lua_State *L) {
+  const char *name = luaL_checkstring(L, 1);
+  for (auto &l : HW_LIBS)
+    if (!strcmp(l.name, name)) { luaL_newlib(L, l.fns); return 1; }
+  lua_pushnil(L);
+  return 1;
+}
+
 void registerHw(lua_State *L) {
-  static const luaL_Reg audioLib[] = {{"record", au_record}, {"play", au_play}, {"stop", au_stop},
-                                      {"status", au_status}, {"analyze", au_analyze}, {nullptr, nullptr}};
-  static const luaL_Reg irLib[] = {{"send", ir_send}, {nullptr, nullptr}};
-  static const luaL_Reg i2cLib[] = {{"scan", i2_scan}, {"read", i2_read}, {"write", i2_write},
-                                    {"read_reg", i2_read_reg}, {"write_reg", i2_write_reg}, {nullptr, nullptr}};
-  static const luaL_Reg httpLib[] = {{"get", ht_get}, {"download", ht_download}, {"dns", ht_dns}, {"ping", ht_ping}, {nullptr, nullptr}};
-  static const luaL_Reg loraLib[] = {{"begin", lo_begin}, {"send", lo_send}, {"recv", lo_recv},
-                                     {"busy", lo_busy}, {"stop", lo_stop}, {nullptr, nullptr}};
-  static const luaL_Reg gpsLib[] = {{"start", gp_start}, {"stop", gp_stop}, {"read", gp_read}, {nullptr, nullptr}};
-  static const luaL_Reg dispLib[] = {{"image", di_image}, {"fill", di_fill}, {"text", di_text}, {nullptr, nullptr}};
-  const struct { const char *name; const luaL_Reg *fns; } libs[] = {
-      {"audio", audioLib}, {"ir", irLib}, {"i2c", i2cLib}, {"http", httpLib},
-      {"lora", loraLib}, {"gps", gpsLib}, {"disp", dispLib}};
-  for (auto &l : libs) {
-    luaL_newlib(L, l.fns);
-    lua_setglobal(L, l.name);
-  }
+  lua_getglobal(L, "sys");
+  lua_pushcfunction(L, hw_lib);
+  lua_setfield(L, -2, "hwlib");
+  lua_pop(L, 1);
 }

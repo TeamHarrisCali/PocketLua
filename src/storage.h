@@ -46,6 +46,11 @@ uint64_t usedBytes();
 void lock(bool on);
 bool remount();
 
+// The SD card is mounted only while used: idleTick() (every frame) unmounts it
+// after a few idle seconds; pin(true/false) keeps it mounted for streaming.
+void idleTick();
+void pin(bool on);
+
 // For drivers that stream files (audio, screenshots, images): the filesystem
 // and real path behind a script path. Returns nullptr when the path is invalid
 // or storage is locked. Parent folders are created when `forWrite` is set.

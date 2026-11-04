@@ -190,6 +190,7 @@ void tick() {
 void share(bool on) {
   if (!mOn || on == shared) return;
   if (on) {
+    store::pin(true);  // mounted card needed for raw sector access
     store::lock(true);
     shared = true;
     msc.mediaPresent(true);
@@ -198,6 +199,7 @@ void share(bool on) {
     shared = false;
     delay(100);
     store::remount();
+    store::pin(false);
   }
 }
 

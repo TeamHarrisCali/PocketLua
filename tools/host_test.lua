@@ -39,6 +39,7 @@ sys = {
   battery = function() return 80, false end,
   reboot = function() end,
   display_hold = function() end,
+  hwlib = function(name) return _G["__hw_" .. name] end,
   screenshot = function(p) sys.shot = p end,
   display_sleep = function(on) sys.asleep = on end,
   reload = function() sys.reloaded = true end,
@@ -115,6 +116,9 @@ lora = { begin = rec("lora_begin", true), send = rec("lora_send", true), recv = 
 gps = { start = rec("gps_start"), stop = rec("gps_stop"), read = function() return { valid = true, lat = 37.77, lon = -122.42,
   alt = 12, sats = 7, hdop = 1.1, speed = 3.5, course = 90, time = "12:00:00", date = "2026-11-03", chars = 1000 } end }
 disp = { image = rec("image", true), fill = rec("dfill"), text = rec("dtext") }
+
+-- the device creates these on first use (sys.hwlib); keep copies for that
+for _, n in ipairs({ "audio", "ir", "i2c", "http", "lora", "gps", "disp" }) do _G["__hw_" .. n] = _G[n] end
 
 -- loopback transport: whatever we send comes back as if the peer sent it
 local net_in = {}

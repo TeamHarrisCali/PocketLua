@@ -245,12 +245,15 @@ local function close_current()
   sys.display_hold(false)
   current, current_name = nil, nil
   unload_app_modules()
+  release_hw()
   shell.free_memory()  -- free the old app and caches before the next one loads
 end
 
 function shell.load_app(name)
   local path = "apps/" .. name .. ".lua"
-  local fn, err = sys.loadfile(path)
+  -- built-in apps load without debug info (~20% less RAM); edited apps keep it
+  local strip = cfg.get("debug_sys") ~= "1" and not sys.in_storage(path)
+  local fn, err = sys.loadfile(path, false, strip)
   if not fn then return nil, err or ("app not found: " .. path) end
   local ok, app = pcall(fn)
   if not ok then return nil, app end

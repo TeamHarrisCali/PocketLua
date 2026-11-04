@@ -13,10 +13,10 @@
 #include "luapool.h"
 #include <Preferences.h>
 
-// A third-of-the-screen frame buffer (22 KB instead of 65 KB): each frame is
-// drawn in three bands, with g_bandY telling the drawing calls which band.
+// A quarter-screen frame buffer (16 KB instead of 65 KB): each frame is drawn
+// in four bands, with g_bandY telling the drawing calls which band.
 M5Canvas canvas(&M5Cardputer.Display);
-static const int BAND_H = (SCREEN_H + 2) / 3;
+static const int BAND_H = (SCREEN_H + 3) / 4;  // 4 bands: 16 KB buffer
 int g_bandY = 0;
 bool g_displayAsleep = false;  // set by sys.display_sleep(); skips drawing
 bool g_displayHold = false;    // set by sys.display_hold(); the app draws directly
@@ -116,7 +116,7 @@ static bool callGlobal(const char *name, const std::function<int(lua_State *)> &
 static void logHeap(const char *tag) {
   usbdev::log(String("heap ") + tag + ": free=" + ESP.getFreeHeap() + " largest=" +
               heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + " lua=" + memUsed +
-              " pool=" + luapool::pageBytes());
+              " pool=" + luapool::pageBytes() + " stack_free=" + uxTaskGetStackHighWaterMark(nullptr));
 }
 
 static bool bootLua(bool safe) {
@@ -390,6 +390,7 @@ static void osTask(void *) {
     }
 
     usbdev::tick();
+    store::idleTick();
     static uint32_t lastHeapLog = 0;
     if (millis() - lastHeapLog > 30000) {
       lastHeapLog = millis();
@@ -438,7 +439,7 @@ static void osTask(void *) {
 
 // The OS runs on Arduino's own loop task (with a larger stack) instead of a
 // second task, which saves that task's stack.
-SET_LOOP_TASK_STACK_SIZE(24 * 1024);
+SET_LOOP_TASK_STACK_SIZE(20 * 1024);  // Lua C-call depth is capped (LUAI_MAXCCALLS) to fit
 
 void setup() {
   Serial.begin(115200);
