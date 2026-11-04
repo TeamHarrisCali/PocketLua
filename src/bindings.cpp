@@ -1,4 +1,5 @@
 #include "bindings.h"
+#include <vector>
 #include <M5Cardputer.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
@@ -16,18 +17,116 @@ extern "C" {
 }
 
 extern M5Canvas canvas;
-static Preferences cfgPrefs;
-static bool prefsOpen = false;
-static Preferences &prefs() {
-  if (!prefsOpen) { cfgPrefs.begin("liveos", false); prefsOpen = true; }
-  return cfgPrefs;
+// ---------------------------------------------------------------- settings
+// Settings live in data/settings.txt (key=value lines), cached in RAM and
+// written 2 s after the last change. They used to be in NVS, the chip's small
+// settings partition shared with M5Launcher and Wi-Fi; LiveOS filled it and
+// Wi-Fi could no longer start (ESP_ERR_NVS_NOT_ENOUGH_SPACE).
+static const char *SETTINGS_FILE = "data/settings.txt";
+static std::vector<std::pair<String, String>> settings;
+static bool settingsLoaded = false, settingsDirty = false;
+static uint32_t settingsChanged = 0;
+
+static const char *OLD_KEYS[] = {
+    "2048_best", "accent", "alarms", "am_axes", "am_flags", "am_sens", "blocks_best", "bright", "click", "clock12",
+    "debug_sys", "dev_key", "dev_name", "dev_on", "dock", "gps_log_n", "gps_units", "ir_brand", "ir_saddr", "lock",
+    "lora_beacon", "lora_call", "lora_freq", "lora_sf", "marble_axes", "marble_b1", "marble_b2", "marble_b3",
+    "marble_b4", "marble_b5", "marble_cal", "morse_best", "morse_wpm", "shot_n", "sleep", "snake_best", "sounds",
+    "steps_day", "steps_goal", "steps_n", "steps_sens", "steps_stride", "store_url", "theme", "tz", "usb_console",
+    "usb_drive", "usb_kbd", "usb_mouse", "usb_serial", "vol", "wifi_auto", "wifi_pass", "wifi_ssid", "wx_last",
+    "wx_loc", "wx_time", "wx_units"};
+
+static String escapeValue(const String &v) {
+  String o;
+  for (char c : v) {
+    if (c == '\\') o += "\\\\";
+    else if (c == '\n') o += "\\n";
+    else o += c;
+  }
+  return o;
+}
+
+static String unescapeValue(const String &v) {
+  String o;
+  for (size_t i = 0; i < v.length(); i++) {
+    if (v[i] == '\\' && i + 1 < v.length()) { o += v[i + 1] == 'n' ? '\n' : v[i + 1]; i++; }
+    else o += v[i];
+  }
+  return o;
+}
+
+static void saveSettingsNow() {
+  String out;
+  for (auto &kv : settings) out += kv.first + "=" + escapeValue(kv.second) + "\n";
+  if (store::write(SETTINGS_FILE, out)) settingsDirty = false;
+}
+
+static void loadSettings() {
+  settingsLoaded = true;
+  String text;
+  if (store::readText(SETTINGS_FILE, text)) {
+    int s = 0;
+    while (s < (int)text.length()) {
+      int e = text.indexOf('\n', s);
+      if (e < 0) e = text.length();
+      String line = text.substring(s, e);
+      int eq = line.indexOf('=');
+      if (eq > 0) settings.push_back({line.substring(0, eq), unescapeValue(line.substring(eq + 1))});
+      s = e + 1;
+    }
+    return;
+  }
+  // First boot with the file: move the old NVS settings over, then free NVS.
+  Preferences p;
+  if (p.begin("liveos", false)) {
+    for (auto k : OLD_KEYS)
+      if (p.isKey(k)) settings.push_back({k, p.getString(k, "")});
+    saveSettingsNow();
+    if (!settingsDirty) p.clear();
+    p.end();
+    usbdev::log(String("settings moved from NVS to ") + SETTINGS_FILE + ": " + settings.size() + " keys");
+  }
+}
+
+static std::pair<String, String> *findSetting(const char *key) {
+  if (!settingsLoaded) loadSettings();
+  for (auto &kv : settings)
+    if (kv.first == key) return &kv;
+  return nullptr;
 }
 
 String cfgGet(const char *key, const char *def) {
-  Preferences &p = prefs();
-  return p.isKey(key) ? p.getString(key, def) : String(def);
+  auto *kv = findSetting(key);
+  return kv ? kv->second : String(def);
 }
-void cfgSet(const char *key, const String &value) { prefs().putString(key, value); }
+
+void cfgSet(const char *key, const String &value) {
+  auto *kv = findSetting(key);
+  if (kv && kv->second == value) return;
+  if (kv) kv->second = value;
+  else settings.push_back({key, value});
+  settingsDirty = true;
+  settingsChanged = millis();
+}
+
+static void cfgRemove(const char *key) {
+  findSetting(key);
+  for (size_t i = 0; i < settings.size(); i++)
+    if (settings[i].first == key) {
+      settings.erase(settings.begin() + i);
+      settingsDirty = true;
+      settingsChanged = millis();
+      return;
+    }
+}
+
+// Called every frame: writes the file a little after the last change.
+void settingsTick() {
+  if (settingsDirty && millis() - settingsChanged > 2000) saveSettingsNow();
+}
+void settingsFlush() {
+  if (settingsDirty) saveSettingsNow();
+}
 
 static int num(lua_State *L, int i) { return (int)floorf((float)luaL_checknumber(L, i)); }
 static int ny(lua_State *L, int i) { return num(L, i) - g_bandY; }  // screen y -> band y
@@ -140,7 +239,7 @@ static int y_battery(lua_State *L) {
   lua_pushboolean(L, chg);
   return 2;
 }
-static int y_reboot(lua_State *L) { ESP.restart(); return 0; }
+static int y_reboot(lua_State *L) { settingsFlush(); ESP.restart(); return 0; }
 // The app draws straight to the panel (disp.*) and frames are not redrawn.
 static int y_display_hold(lua_State *L) { shell::setHold(lua_toboolean(L, 1)); return 0; }
 static int y_screenshot(lua_State *L) { g_screenshotPath = str(L, 1); return 0; }
@@ -264,16 +363,16 @@ static int y_storage(lua_State *L) {
 
 // ---------------------------------------------------------------- cfg
 static int c_get(lua_State *L) {
-  String k = str(L, 1);
-  if (!prefs().isKey(k.c_str())) { lua_pushnil(L); return 1; }
-  lua_pushstring(L, prefs().getString(k.c_str(), "").c_str());
+  auto *kv = findSetting(luaL_checkstring(L, 1));
+  if (!kv) { lua_pushnil(L); return 1; }
+  lua_pushstring(L, kv->second.c_str());
   return 1;
 }
 static int c_set(lua_State *L) {
-  String k = str(L, 1);
-  if (k.length() > 15) return luaL_error(L, "cfg key too long (max 15)");
-  if (lua_isnil(L, 2)) prefs().remove(k.c_str());
-  else prefs().putString(k.c_str(), luaL_tolstring(L, 2, nullptr));
+  const char *k = luaL_checkstring(L, 1);
+  if (strlen(k) > 24) return luaL_error(L, "cfg key too long (max 24)");
+  if (lua_isnil(L, 2)) cfgRemove(k);
+  else cfgSet(k, luaL_tolstring(L, 2, nullptr));
   return 0;
 }
 
@@ -285,6 +384,7 @@ static uint32_t wifiStart = 0;
 // ~40-50 KB, so Lua garbage is collected first and the outcome is logged.
 bool wifiEnable(bool on) {
   if (on) {
+    WiFi.persistent(false);  // keep Wi-Fi config in RAM: NVS is small and shared with M5Launcher
     size_t before = heap_caps_get_free_size(MALLOC_CAP_8BIT);
     size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     bool modeOk = WiFi.mode(WIFI_STA);
@@ -457,7 +557,6 @@ static void add(lua_State *L, const char *name, const luaL_Reg *fns) {
 }
 
 void registerApi(lua_State *L) {
-  prefs();
 
   static const luaL_Reg gfxLib[] = {
       {"rgb", g_rgb}, {"clear", g_clear}, {"px", g_px}, {"line", g_line}, {"rect", g_rect}, {"fill", g_fill},

@@ -14,6 +14,8 @@ void playTone(uint16_t freq, uint32_t ms);
 void batteryInfo(int &pct, bool &charging);
 bool wifiEnable(bool on);
 void wifiConnect(const char *ssid, const char *pass);
+void settingsTick();   // writes data/settings.txt after changes
+void settingsFlush();  // writes now (before a reboot)
 
 // Provided by main.cpp
 extern int g_bandY;

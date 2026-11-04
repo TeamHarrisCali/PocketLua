@@ -197,14 +197,11 @@ static void osMain() {
   store::begin();
   {
     // USB classes are chosen in Settings and take effect at boot.
-    Preferences p;
-    p.begin("liveos", true);
-    bool kbd = p.getString("usb_kbd", "0") == "1";
-    bool drive = p.getString("usb_drive", "0") == "1";
-    bool serial = p.getString("usb_serial", "1") == "1";  // on by default so the log can be read
-    bool console = p.getString("usb_console", "0") == "1";
-    bool mouse = p.getString("usb_mouse", "0") == "1";
-    p.end();
+    bool kbd = cfgGet("usb_kbd", "0") == "1";
+    bool drive = cfgGet("usb_drive", "0") == "1";
+    bool serial = cfgGet("usb_serial", "1") == "1";  // on by default so the log can be read
+    bool console = cfgGet("usb_console", "0") == "1";
+    bool mouse = cfgGet("usb_mouse", "0") == "1";
     usbdev::begin(kbd, drive, serial, console, mouse);
     usbdev::log(String("LiveOS boot, storage=") + store::kind() + ", embedded files=" + (int)EMBEDDED_COUNT);
   }
@@ -222,6 +219,7 @@ static void osMain() {
     uint32_t t0 = millis();
     usbdev::tick();
     syslog::drain();
+    settingsTick();
     hwTick();
     if (millis() - lastHeapLog > 30000) {
       lastHeapLog = millis();
