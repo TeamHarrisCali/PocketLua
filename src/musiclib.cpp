@@ -144,7 +144,7 @@ static int ml_albums_in(lua_State *L) {
 // ---------------------------------------------------------------- tags
 // Text to plain ASCII: Latin-1 letters folded (e -> e), typographic quotes
 // and dashes simplified, anything else '?'.
-static void putAscii(String &out, uint32_t c) {
+void putAscii(String &out, uint32_t c) {
   static const char fold[] = "AAAAAAACEEEEIIIIDNOOOOOxOUUUUYPsaaaaaaaceeeeiiiidnooooo/ouuuuypy";
   if (!c) return;
   if (c < 0x80) out += c == '\t' || c < 0x20 ? ' ' : (char)c;
@@ -156,7 +156,7 @@ static void putAscii(String &out, uint32_t c) {
   else out += '?';
 }
 
-static void utf8Ascii(String &out, const uint8_t *p, size_t n) {
+void utf8Ascii(String &out, const uint8_t *p, size_t n) {
   for (size_t i = 0; i < n && p[i];) {
     uint32_t c = p[i];
     int more = c < 0x80 ? 0 : c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : -1;

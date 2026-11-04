@@ -14,6 +14,11 @@ extern String lastError;
 // buffers fragment the heap, and Lua needs blocks bigger than what is left.
 void reserveArena();
 size_t arenaFree();
+// Lend the arena's spare room to native code (see vm.cpp); return it with
+// arenaReturn. inArena tells whose block a pointer is.
+void *arenaBorrow(size_t n);
+bool inArena(const void *p);
+void arenaReturn(void *p);
 
 bool open();
 void close();

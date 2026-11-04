@@ -23,6 +23,7 @@ static const size_t MEM_LIMIT = 160 * 1024;
 static const size_t HEAP_RESERVE = 16 * 1024;
 static multi_heap_handle_t arena = nullptr;
 static void *arenaMem = nullptr;
+static portMUX_TYPE arenaLock = portMUX_INITIALIZER_UNLOCKED;  // Lua and the Discord TLS task share it
 
 static void *aMalloc(size_t n) { return arena ? multi_heap_malloc(arena, n) : malloc(n); }
 static void *aRealloc(void *p, size_t n) { return arena ? multi_heap_realloc(arena, p, n) : realloc(p, n); }
@@ -36,9 +37,18 @@ void reserveArena() {
   if (!arenaMem) { usbdev::log("lua arena: could not reserve, using the shared heap"); return; }
   arena = multi_heap_register(arenaMem, ARENA_SIZE);
   if (!arena) { heap_caps_free(arenaMem); arenaMem = nullptr; return; }
+  multi_heap_set_lock(arena, &arenaLock);
   luapool::setBackend(arenaPage, arenaPageFree);
   usbdev::log(String("lua arena: ") + ARENA_SIZE / 1024 + " KB reserved");
 }
+
+// Native code may borrow the arena's spare room (TLS buffers while an app
+// talks HTTPS): what Lua isn't using would otherwise sit idle.
+void *arenaBorrow(size_t n) { return arena ? multi_heap_malloc(arena, n) : nullptr; }
+bool inArena(const void *p) {
+  return arenaMem && p >= arenaMem && (const uint8_t *)p < (const uint8_t *)arenaMem + ARENA_SIZE;
+}
+void arenaReturn(void *p) { multi_heap_free(arena, p); }
 
 size_t arenaFree() { return arena ? multi_heap_free_size(arena) : heap_caps_get_free_size(MALLOC_CAP_8BIT); }
 static const uint32_t CALL_BUDGET_MS = 2500;

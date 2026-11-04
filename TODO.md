@@ -14,6 +14,12 @@ Open issues found on the device. Newest first.
 
 ## Planned
 
+- **Flash space** is 89.8% used (2026-11-04, after Discord added TLS). If it runs short, compress the
+  embedded sources: the device runs the bytecode, and only the editor reads the source, so about
+  270 KB of it could shrink. Also check how large an app M5Launcher accepts.
+- **Discord:** not yet tried on the device. Watch the log for "discord: TLS connect failed"; it shows
+  free heap and arena when the connection fails.
+
 - **App updates over the internet** (user idea, 2026-11-04): publish the apps on GitHub; on startup
   (with Wi-Fi) LiveOS checks a manifest and downloads new or changed apps to `/liveos/apps/`, so new apps
   and fixes don't need a new firmware. Only native changes (C++) would need a firmware update.
