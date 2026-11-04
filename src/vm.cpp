@@ -118,22 +118,26 @@ bool open() {
   L = lua_newstate(alloc, nullptr);
   if (!L) { lastError = "not enough memory"; return false; }
   luaL_requiref(L, "_G", luaopen_base, 1);
-  luaL_requiref(L, LUA_TABLIBNAME, luaopen_table, 1);
-  luaL_requiref(L, LUA_STRLIBNAME, luaopen_string, 1);
-  luaL_requiref(L, LUA_MATHLIBNAME, luaopen_math, 1);
-  luaL_requiref(L, LUA_UTF8LIBNAME, luaopen_utf8, 1);
-  luaL_requiref(L, LUA_COLIBNAME, luaopen_coroutine, 1);
+  luaL_requiref(L, LUA_STRLIBNAME, luaopen_string, 1);  // math, table, utf8, coroutine: on first use (hw.cpp)
   lua_settop(L, 0);
   lua_pushnil(L); lua_setglobal(L, "dofile");
   lua_pushnil(L); lua_setglobal(L, "loadfile");
   lua_sethook(L, hook, LUA_MASKCOUNT, 20000);
+  size_t m0 = used;
   registerApi(L);
+  size_t m1 = used;
   registerHw(L);
   ui::registerLua(L);
+  size_t m2 = used;
   shell::registerLua(L);
+  size_t m3 = used;
   String err;
   if (!loadChunk(L, "runtime.lua", true, true, err)) { lastError = err; close(); return false; }
   if (!call(0, 0)) { close(); return false; }
+  lua_gc(L, LUA_GCCOLLECT);
+  // what every app starts with (see where to slim it down)
+  usbdev::log(String("vm: lua ") + m0 + " + api " + (m1 - m0) + " + ui " + (m2 - m1) + " + shell " + (m3 - m2) +
+              " + runtime " + (used - m3) + " = " + used);
   return true;
 }
 

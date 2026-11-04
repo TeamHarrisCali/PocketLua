@@ -1,13 +1,15 @@
 -- App runtime: runs in each app's Lua VM before the app itself. The OS is
--- native code; this only provides require/modules, print, lazily created
--- hardware tables, and the serializer behind app.save().
+-- native code; this only provides require/modules, print and the tables that
+-- are created on first use.
 collectgarbage("incremental", 100, 400)
 
--- Hardware driver tables are created on first use.
-local HW = { audio = true, ir = true, i2c = true, http = true, lora = true, gps = true, disp = true,
-  musiclib = true, appstore = true }
+-- Driver tables, the APIs few apps use and the standard libraries other than
+-- string are created on first use, so an app only pays for what it touches.
+local LAZY = { audio = true, ir = true, i2c = true, http = true, lora = true, gps = true, disp = true,
+  musiclib = true, appstore = true, gfx = true, snd = true, imu = true, wifi = true, usb = true, net = true,
+  clock = true, math = true, table = true, utf8 = true, coroutine = true }
 setmetatable(_G, { __index = function(t, k)
-  if HW[k] then
+  if LAZY[k] then
     local lib = sys.hwlib(k)
     rawset(t, k, lib)
     return lib
@@ -57,26 +59,8 @@ function print(...)
   shell.log_line(table.concat(t, "\t"))
 end
 
--- app.save() tables are kept as text while the app is closed.
-local function ser(v, depth)
-  local t = type(v)
-  if t == "boolean" or t == "number" then return tostring(v) end
-  if t == "string" then return string.format("%q", v) end
-  if t == "table" and depth < 6 then
-    local parts = {}
-    for k, val in pairs(v) do parts[#parts + 1] = "[" .. ser(k, depth + 1) .. "]=" .. ser(val, depth + 1) end
-    return "{" .. table.concat(parts, ",") .. "}"
-  end
-  return "nil"
-end
-function __ser(v) return ser(v, 0) end
-function __deser(s)
-  local fn = load("return " .. s, "=saved", "t", {})
-  if fn then
-    local ok, v = pcall(fn)
-    if ok then return v end
-  end
-end
+-- app.save() tables are kept as text while the app is closed: __ser and
+-- __deser are native (bindings.cpp).
 
 -- Device sharing runs while an app that uses it is open (Nearby).
 function shell.dev_restart()

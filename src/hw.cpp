@@ -19,6 +19,7 @@ static void *mp3Scratch = nullptr;
 #define MINIMP3_SCRATCH mp3Scratch
 #include <minimp3.h>
 #include "hw.h"
+#include "bindings.h"
 #include "musiclib.h"
 #include "storage.h"
 #include "usbdev.h"
@@ -1005,11 +1006,18 @@ static const struct { const char *name; const luaL_Reg *fns; } HW_LIBS[] = {
     {"lora", loraLib}, {"gps", gpsLib}, {"disp", dispLib}, {"musiclib", musiclibFns},
     {"appstore", appstoreFns}};
 
-// sys.hwlib(name) -> the table for that driver, or nil
+// sys.hwlib(name) -> the table for that driver or library, or nil (runtime.lua
+// calls it the first time an app uses one of these globals)
 static int hw_lib(lua_State *L) {
   const char *name = luaL_checkstring(L, 1);
   for (auto &l : HW_LIBS)
     if (!strcmp(l.name, name)) { luaL_newlib(L, l.fns); return 1; }
+  if (openApiLib(L, name)) return 1;
+  // standard libraries most apps don't need at once (vm.cpp opens base and string)
+  static const struct { const char *name; lua_CFunction open; } STD[] = {
+      {"math", luaopen_math}, {"table", luaopen_table}, {"utf8", luaopen_utf8}, {"coroutine", luaopen_coroutine}};
+  for (auto &l : STD)
+    if (!strcmp(l.name, name)) { luaL_requiref(L, l.name, l.open, 0); return 1; }
   lua_pushnil(L);
   return 1;
 }
