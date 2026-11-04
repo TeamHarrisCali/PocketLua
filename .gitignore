@@ -1,0 +1,5 @@
+.pio/
+.vscode/
+dist/*.bin
+/
+src/embedded_files.gen.cpp
