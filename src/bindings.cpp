@@ -345,9 +345,10 @@ static int y_list(lua_State *L) {
   }
   return 1;
 }
-// list_names(dir [, "mp3,wav"]) -> sorted names as plain strings: folders
-// first with a "/" suffix, then files (only those extensions, if given). Much
-// smaller than list() for big folders such as a music library.
+// list_names(dir [, "mp3,wav" [, max]]) -> sorted names as plain strings:
+// folders first with a "/" suffix, then files (only those extensions, if
+// given), at most max of them. Much smaller than list() for big folders such
+// as a music library.
 static int y_list_names(lua_State *L) {
   auto items = store::list(str(L, 1));
   String exts = luaL_optstring(L, 2, "");
@@ -367,10 +368,12 @@ static int y_list_names(lua_State *L) {
   auto byName = [](const String &a, const String &b) { return strcasecmp(a.c_str(), b.c_str()) < 0; };
   std::sort(dirs.begin(), dirs.end(), byName);
   std::sort(files.begin(), files.end(), byName);
-  lua_createtable(L, dirs.size() + files.size(), 0);
-  int i = 1;
-  for (auto &n : dirs) { lua_pushstring(L, n.c_str()); lua_rawseti(L, -2, i++); }
-  for (auto &n : files) { lua_pushstring(L, n.c_str()); lua_rawseti(L, -2, i++); }
+  size_t max = (size_t)luaL_optinteger(L, 3, 0), count = dirs.size() + files.size();
+  if (max && count > max) count = max;
+  lua_createtable(L, count, 0);
+  size_t i = 0;
+  for (auto &n : dirs) { if (i == count) break; lua_pushstring(L, n.c_str()); lua_rawseti(L, -2, ++i); }
+  for (auto &n : files) { if (i == count) break; lua_pushstring(L, n.c_str()); lua_rawseti(L, -2, ++i); }
   return 1;
 }
 

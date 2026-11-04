@@ -98,7 +98,7 @@ sys = {
     end
     return out
   end,
-  list_names = function(dir, exts)
+  list_names = function(dir, exts, max)
     local dirs, files, want = {}, {}, nil
     if exts and exts ~= "" then
       want = {}
@@ -111,6 +111,7 @@ sys = {
     local function by(a, b) return a:lower() < b:lower() end
     table.sort(dirs, by); table.sort(files, by)
     for _, f in ipairs(files) do dirs[#dirs + 1] = f end
+    if max and max > 0 then for i = #dirs, max + 1, -1 do dirs[i] = nil end end
     return dirs
   end,
 }

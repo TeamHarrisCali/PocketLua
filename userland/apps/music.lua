@@ -10,12 +10,14 @@ local col = ui.col
 local app = { title = "Music", icon = "music", color = "pink", order = 41, category = "media" }
 
 local ROOT, RECORDINGS = "data/music", "data/recordings"
+local MAX_ENTRIES = 300       -- per folder: about 15 KB of names on the device
 
 -- Only the folder on screen is in memory, as plain strings: a library with
 -- hundreds of artists stays small. names[i] ends in "/" for a folder.
 local dir = ROOT
 local names, rows = {}, {}    -- names as listed; what the list shows
 local rec_row = nil           -- row of the recordings folder (top level only)
+local play_row = nil          -- row of the playing track, if it is in the folder on screen
 local sel, top = 1, 1
 local queue, cur = {}, nil    -- tracks of the folder playback started in; index playing
 local playing, grace = false, 0
@@ -37,20 +39,33 @@ local function path_of(i)
   return n and (dir .. "/" .. (n:gsub("/$", ""))) or nil
 end
 
+-- Row of path p in the folder on screen, or nil. Compares names as they are
+-- listed, so no string per row is made (the Lua heap is small).
+local function row_of(p)
+  if not p then return nil end
+  if p == RECORDINGS then return rec_row end
+  if parent(p) ~= dir then return nil end
+  local b = base(p)
+  local bd = b .. "/"
+  for i = 1, #names do
+    if names[i] == b or names[i] == bd then return i end
+  end
+end
+
 -- Lists one folder (subfolders first, then tracks) and selects select_path.
 local function open_dir(d, select_path)
   dir, sel, top, rec_row = d, 1, 1, nil
-  names = sys.list_names(d, "mp3,wav") or {}
-  rows = {}
+  names, rows = {}, {}
+  collectgarbage()  -- free the last folder's lists before reading the next
+  names = sys.list_names(d, "mp3,wav", MAX_ENTRIES) or {}
   for i, n in ipairs(names) do rows[i] = n:sub(-1) == "/" and n or title(n) end
-  if d == ROOT and #(sys.list_names(RECORDINGS, "wav") or {}) > 0 then
+  if d == ROOT and #(sys.list_names(RECORDINGS, "wav", 1) or {}) > 0 then
     names[#names + 1] = "Recordings/"
     rows[#rows + 1] = "Recordings/"
     rec_row = #names
   end
-  for i = 1, #names do
-    if path_of(i) == select_path then sel = i end
-  end
+  sel = row_of(select_path) or 1
+  play_row = row_of(cur and queue[cur])
 end
 
 -- Type a letter to jump to the next entry starting with it.
@@ -70,15 +85,14 @@ local function play_at(i)
   audio.stop()
   local ok, why = audio.play(p)
   if not ok then
-    cur = nil
+    cur, play_row = nil, nil
     shell.sound("error")
     shell.toast(tostring(why or "Can't play this file"), 3)
     return
   end
   cur, playing, grace, done, total = i, true, 1, 0, 0
-  for j = 1, #names do  -- the selection follows playback in the folder on screen
-    if path_of(j) == p then sel = j end
-  end
+  play_row = row_of(p)
+  sel = play_row or sel  -- the selection follows playback in the folder on screen
 end
 
 -- Plays the selected track and queues the tracks of the folder on screen.
@@ -116,7 +130,7 @@ function app.init(args)
   local path = args and args.path
   if path then
     open_dir(parent(path), path)
-    if path_of(sel) ~= path then
+    if row_of(path) ~= sel then
       -- the folder could not be listed: play the file on its own
       dir, names, rows, sel, rec_row = parent(path), { base(path) }, { title(path) }, 1, nil
     end
@@ -160,7 +174,7 @@ function app.draw()
   else
     top = ui.list(rows, sel, top, 4, 59, 230, 15, 4)
   end
-  local enter = is_dir(sel) and "Open" or ((playing and path_of(sel) == np) and "Stop" or "Play")
+  local enter = is_dir(sel) and "Open" or ((playing and play_row == sel) and "Stop" or "Play")
   ui.footer({ { "Enter", enter }, { ",/", "Skip" }, { "A-Z", "Find" }, { "Esc", dir == ROOT and "Home" or "Up" } })
 end
 
@@ -174,7 +188,7 @@ function app.key(k)
   elseif k.key == "enter" then
     if not names[sel] then return true end
     if is_dir(sel) then open_dir(path_of(sel))
-    elseif playing and path_of(sel) == now_playing() then stop()
+    elseif playing and play_row == sel then stop()
     else play_selected() end
   elseif k.key == "esc" or k.key == "backspace" then
     if dir == ROOT then return false end
