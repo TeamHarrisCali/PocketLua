@@ -14,10 +14,22 @@ Open issues found on the device. Newest first.
 
 ## Planned
 
-- **Music, next steps** (the player works on the device as of `ab4037c`):
-  - Background playback: keep playing on the desktop, with controls in the status bar. The decoding is
-    native already; the queue and next-track logic would have to move out of the Music app's Lua.
-  - The on-device "Rescan library" has not been tried on a real card yet.
+- **App updates over the internet** (user idea, 2026-11-04): publish the apps on GitHub; on startup
+  (with Wi-Fi) LiveOS checks a manifest and downloads new or changed apps to `/liveos/apps/`, so new apps
+  and fixes don't need a new firmware. Only native changes (C++) would need a firmware update.
+  Notes for the design:
+  - Ship apps as precompiled bytecode (`.luac` from `tools/luac32`, built by a script or GitHub
+    Actions), not source. Compiling on the device needs about 2x the RAM, which is why Music
+    couldn't open until built-ins became bytecode. The loader would prefer `apps/x.luac` over `x.lua`.
+  - The manifest lists each app with its version, size and SHA-256. Check it before replacing anything,
+    and keep the previous copy to roll back if the new one fails to load.
+  - HTTPS to GitHub needs the same TLS memory approach as Discord (borrowing the Lua arena's spare
+    room); check once at boot with nothing else open, not on every app launch.
+  - The bytecode format depends on the firmware's Lua build, so the manifest names the firmware
+    versions an app needs.
+  - The existing Store app may be the place for the UI.
+- **Music:** the on-device "Rescan library" has not been tried on a real card yet. (Background
+  playback outside the app: dropped by the user, because of the memory risk.)
 
 ## Done
 
