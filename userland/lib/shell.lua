@@ -330,7 +330,7 @@ end
 
 -- Screenshots (Fn+P) are written as BMP by the core on the next frame.
 function shell.screenshot()
-  local dir = sys.storage() == "SD" and "sd:/screenshots" or "data/screenshots"
+  local dir = "data/screenshots"
   sys.mkdirs(dir)
   local n = (tonumber(cfg.get("shot_n")) or 0) + 1
   cfg.set("shot_n", n)

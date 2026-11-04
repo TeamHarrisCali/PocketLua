@@ -15,7 +15,7 @@ local function ext_of(name) return (name:match("%.(%w+)$") or ""):lower() end
 
 local function scan()
   files, rows = {}, {}
-  local dirs = sys.storage() == "SD" and { "sd:/screenshots", "sd:/images" } or { "data/screenshots" }
+  local dirs = { "data/screenshots", "data/images" }
   where = #dirs > 1 and "Screenshots (Fn+P) and sd:/images" or "Screenshots (Fn+P) appear here"
   for _, d in ipairs(dirs) do
     local found = {}

@@ -5,7 +5,7 @@ local col = ui.col
 local app = { title = "App Store", icon = "store", color = "green", order = 24, category = "system" }
 
 local TABS = { "SD card", "Web", "Installed" }
-local SD_DIR = "sd:/liveos-apps"
+local SD_DIR = "data/install"  -- copy .lua apps to /liveos/data/install on the card
 local MAX_APP = 32 * 1024   -- the editor's limit too
 local MAX_LIST = 50
 

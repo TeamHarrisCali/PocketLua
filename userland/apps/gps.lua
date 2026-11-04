@@ -72,7 +72,7 @@ local function track(lat, lon)
   end
 end
 
-local function log_dir() return sys.storage() == "SD" and "sd:/gps" or "data/gps" end
+local function log_dir() return "data/gps" end
 
 local function next_file()
   local dir = log_dir()

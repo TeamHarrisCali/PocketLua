@@ -30,7 +30,7 @@ return app
 | `sys.millis()` | Milliseconds since boot |
 | `sys.heap()` | Free bytes, Lua bytes, largest block, total |
 | `sys.battery()` | Percent, charging |
-| `sys.read_text(path[, max])` | File contents or `nil`. Paths are LiveOS-relative (`data/x.txt`) or `sd:/...` |
+| `sys.read_text(path[, max])` | File contents or `nil`. Paths are LiveOS-relative (`data/x.txt`, stored in `/liveos/` on the card); write only there, `sd:/...` is for reading the user's own files |
 | `sys.write_text(path, s)` | Writes atomically (temp file, then rename) |
 | `sys.append_text(path, s)` | Appends without reading the file (logs, tracks) |
 | `sys.rename(from, to)` | Moves a file, replacing the destination |

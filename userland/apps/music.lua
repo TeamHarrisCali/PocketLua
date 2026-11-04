@@ -38,8 +38,8 @@ local function scan(extra)
   tracks, rows = {}, {}
   sd = sys.storage() == "SD"
   if sd then
-    add_dir("sd:/music", nil)
-    add_dir("sd:/recordings", "rec")
+    add_dir("data/music", nil)
+    add_dir("data/recordings", "rec")
   else
     add_dir("data/recordings", "rec")
   end

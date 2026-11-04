@@ -92,7 +92,7 @@ end
 
 function app.init()
   on_sd = sys.storage() == "SD"
-  dir = on_sd and "sd:/recordings" or "data/recordings"
+  dir = "data/recordings"
   sys.mkdirs(dir)
   sel, top = 1, 1
   recording, playing = false, nil

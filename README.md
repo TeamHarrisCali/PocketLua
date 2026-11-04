@@ -15,7 +15,7 @@ Copy `dist/LiveOS.bin` to the SD card and launch it from M5Launcher. It is a pla
 | G0 button | Home from anywhere |
 | Fn+Q | Quick settings: brightness, volume, Wi-Fi, theme, sleep |
 | Fn+N | Notification center |
-| Fn+P | Screenshot, saved as a BMP in `sd:/screenshots` |
+| Fn+P | Screenshot, saved as a BMP in `data/screenshots` |
 | Fn+L | Lock screen |
 | Hold `S` at boot | Safe mode (built-in system only) |
 
