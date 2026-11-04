@@ -31,6 +31,8 @@
 #include "usbdev.h"
 #include "vm.h"
 
+extern const char *volatile g_crumb;  // main.cpp: what the main loop is doing
+
 namespace {
 
 // ---------------------------------------------------------------- TLS state
@@ -222,6 +224,15 @@ uint32_t nextPoll = 0;
 struct Lock {
   Lock() { xSemaphoreTake(mu, portMAX_DELAY); }
   ~Lock() { xSemaphoreGive(mu); }
+};
+// From Lua (the main loop): leave a breadcrumb, then lock.
+struct LuaLock {
+  LuaLock(const char *what) {
+    g_crumb = what;
+    xSemaphoreTake(mu, portMAX_DELAY);
+    g_crumb = "app update";
+  }
+  ~LuaLock() { xSemaphoreGive(mu); }
 };
 
 void setState(const String &s, const String &e = "") {
@@ -606,7 +617,7 @@ int l_channels(lua_State *L) { start(CHANNELS, luaL_checkstring(L, 1)); return 0
 // list() -> nil while fetching, then {{id=, name=}, ...} (empty on error)
 int l_list(lua_State *L) {
   if (!mu) return 0;
-  Lock l;
+  LuaLock l("discord.list lock");
   if (!itemsReady) return 0;
   lua_createtable(L, items.size(), 0);
   for (size_t i = 0; i < items.size(); i++) {
@@ -622,7 +633,7 @@ int l_list(lua_State *L) {
 int l_open(lua_State *L) {
   {
     if (!mu) mu = xSemaphoreCreateMutex();
-    Lock l;
+    LuaLock l("discord.open lock");
     channel = luaL_checkstring(L, 1);
     msgs.clear();
     lastId = 0;
@@ -634,7 +645,7 @@ int l_open(lua_State *L) {
 int l_send(lua_State *L) {
   if (!mu) return 0;
   {
-    Lock l;
+    LuaLock l("discord.send lock");
     if (outbox.size() < 3) outbox.push_back(luaL_checkstring(L, 1));
   }
   if (task) xTaskNotifyGive(task);
@@ -645,7 +656,7 @@ int l_messages(lua_State *L) {
   uint32_t after = luaL_optinteger(L, 1, 0);
   lua_newtable(L);
   if (!mu) return 1;
-  Lock l;
+  LuaLock l("discord.messages lock");
   int n = 0;
   for (auto &m : msgs) {
     if (m.seq <= after) continue;
@@ -661,13 +672,14 @@ int l_messages(lua_State *L) {
 // status() -> "idle"|"working"|"ok"|"error", error message
 int l_status(lua_State *L) {
   if (!mu) { lua_pushstring(L, "idle"); return 1; }
-  Lock l;
+  LuaLock l("discord.status lock");
   lua_pushstring(L, state.c_str());
   lua_pushstring(L, error.c_str());
   return 2;
 }
 // stop(): end the task (waits for a request in flight) and forget the token
 int l_stop(lua_State *L) {
+  g_crumb = "discord.stop (waiting for the task)";
   if (task) {
     quit = true;
     xTaskNotifyGive(task);
@@ -678,7 +690,7 @@ int l_stop(lua_State *L) {
     luaBudgetReset();
   }
   if (mu) {
-    Lock l;
+    LuaLock l("discord.stop lock");
     channel = "";
     msgs.clear();
     msgs.shrink_to_fit();

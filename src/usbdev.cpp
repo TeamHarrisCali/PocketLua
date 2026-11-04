@@ -166,22 +166,48 @@ String serialRead() {
 // The log is also appended to data/log.txt on the card (main task only), so it
 // can be read later even if USB was not connected when something failed.
 static bool inFileLog = false;
+// log() is called from several tasks (the main loop, Discord's network task,
+// the stall monitor), so the ring and the pending lines are locked. Lines from
+// other tasks reach the file through the main task (tick / its next log).
+static SemaphoreHandle_t logMu = nullptr;
+static String pendingFile;
+
+static void flushPending() {
+  if (inFileLog || xTaskGetCurrentTaskHandle() != mainTask || !logMu) return;
+  xSemaphoreTake(logMu, portMAX_DELAY);
+  String out = pendingFile;
+  pendingFile = "";
+  xSemaphoreGive(logMu);
+  if (!out.length()) return;
+  inFileLog = true;
+  store::append("data/log.txt", out.c_str(), out.length());
+  inFileLog = false;
+}
+
 void log(const String &line) {
-  if (!inFileLog && xTaskGetCurrentTaskHandle() == mainTask) {
-    inFileLog = true;
-    String l = String(millis() / 1000) + "s " + line + "\n";
-    store::append("data/log.txt", l.c_str(), l.length());
-    inFileLog = false;
-  }
+  if (!logMu) logMu = xSemaphoreCreateMutex();  // first call is at boot, before other tasks exist
+  String stamped = String(millis() / 1000) + "s " + line + "\n";
+  xSemaphoreTake(logMu, portMAX_DELAY);
+  if (pendingFile.length() < 4096) pendingFile += stamped;
   ring += line;
   ring += '\n';
   if (ring.length() > 3000) ring.remove(0, ring.length() - 3000);
-  if (!consoleOn && serialConnected()) serialWrite("# " + line + "\n");
+  bool toSerial = !consoleOn && serialConnected();
+  xSemaphoreGive(logMu);
+  flushPending();
+  if (toSerial) serialWrite("# " + line + "\n");
 }
 
-String logDump() { return ring; }
+String logDump() {
+  if (!logMu) return ring;
+  xSemaphoreTake(logMu, portMAX_DELAY);
+  String copy = ring;
+  xSemaphoreGive(logMu);
+  return copy;
+}
 
 void tick() {
+  flushPending();
   static uint32_t connectedAt = 0;
   static bool pending = false;
   bool now = serialConnected();
@@ -199,11 +225,12 @@ void tick() {
   if (pending && millis() - connectedAt > 500 && !consoleOn && cOn) {
     pending = false;
     serialWrite("# --- log so far ---\n");
+    String backlog = logDump();
     int start = 0;
-    while (start < (int)ring.length()) {  // line by line so the CDC buffer is never overrun
-      int nl = ring.indexOf('\n', start);
-      if (nl < 0) nl = ring.length();
-      serialWrite("# " + ring.substring(start, nl) + "\n");
+    while (start < (int)backlog.length()) {  // line by line so the CDC buffer is never overrun
+      int nl = backlog.indexOf('\n', start);
+      if (nl < 0) nl = backlog.length();
+      serialWrite("# " + backlog.substring(start, nl) + "\n");
       start = nl + 1;
       delay(2);
     }

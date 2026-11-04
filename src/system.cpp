@@ -24,6 +24,7 @@ extern M5Canvas canvas;
 using ui::col;
 
 bool discordBusy();  // discord.cpp: a TLS request is running and needs the heap
+extern const char *volatile g_crumb;  // main.cpp: what the main loop is doing
 void setFrameSlim(bool slim);  // main.cpp: half-size frame buffer for HTTPS apps
 
 namespace shell {
@@ -1343,6 +1344,7 @@ void update(float dt) {
 
   if (screen == APP && vm::L) {
     lua_State *L = vm::L;
+    g_crumb = "app update";
     if (appFn("update")) {
       lua_pushnumber(L, dt);
       if (!vm::call(1, 0)) { fail(vm::lastError); return; }
@@ -1364,6 +1366,7 @@ void drawBand() {
       title = query.length() ? "Search" : folder >= 0 ? CAT_LABELS[folder] : "Apps";
       break;
     case APP:
+      g_crumb = "app draw";
       if (appFn("draw") && !vm::call(0, 0)) fail(vm::lastError);
       canvas.clearClipRect();
       title = appTitle;
@@ -1391,6 +1394,7 @@ void drawBand() {
 static void appKey(const Key &k) {
   lua_State *L = vm::L;
   bool consumed = false;
+  g_crumb = "app key";
   if (L && appFn("key")) {
     lua_createtable(L, 0, 6);
     lua_pushstring(L, k.key); lua_setfield(L, -2, "key");

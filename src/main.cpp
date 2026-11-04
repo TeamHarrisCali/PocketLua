@@ -28,6 +28,36 @@ int g_bandH = BAND_H;
 
 bool discordBusy();  // discord.cpp
 
+// Stall diagnosis: the main loop leaves a breadcrumb (what it is doing) and a
+// heartbeat. A small task watches the heartbeat: if the loop stops for 8 s it
+// logs the breadcrumb (USB still works from another task); after 30 s it
+// restarts, and the next boot logs where the last run was stuck. The text is
+// kept in RTC memory, which survives a software restart.
+const char *volatile g_crumb = "boot";
+static volatile uint32_t g_beat = 0;
+RTC_NOINIT_ATTR static char stuckAt[40];
+RTC_NOINIT_ATTR static uint32_t stuckMagic;
+static const uint32_t STUCK = 0x57A11ED;
+
+static void watchMain(void *) {
+  uint32_t last = g_beat, since = millis();
+  bool told = false;
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    if (g_beat != last) { last = g_beat; since = millis(); told = false; continue; }
+    uint32_t stuck = millis() - since;
+    if (stuck > 8000 && !told) {
+      told = true;
+      usbdev::log(String("main loop stuck for 8 s at: ") + g_crumb);
+    }
+    if (stuck > 30000) {
+      strlcpy(stuckAt, g_crumb, sizeof stuckAt);
+      stuckMagic = STUCK;
+      esp_restart();
+    }
+  }
+}
+
 void setFrameSlim(bool slim) {
   int h = slim ? SLIM_BAND_H : BAND_H;
   if (h == g_bandH) return;
@@ -239,6 +269,11 @@ static void osMain() {
     bool mouse = cfgGet("usb_mouse", "0") == "1";
     usbdev::begin(kbd, drive, serial, console, mouse);
     usbdev::log(String("reset reason: ") + resetReason());
+    if (stuckMagic == STUCK) {
+      stuckAt[sizeof stuckAt - 1] = 0;
+      usbdev::log(String("previous run: main loop stuck 30 s at: ") + stuckAt + ", restarted");
+      stuckMagic = 0;
+    }
     usbdev::log(String("LiveOS boot, storage=") + store::kind() + ", embedded files=" + (int)EMBEDDED_COUNT +
                 ", board=" + (int)M5.getBoard() + (M5.getBoard() == m5::board_t::board_M5CardputerADV ? " (ADV)" : ""));
   }
@@ -253,11 +288,16 @@ static void osMain() {
   logHeap(safe ? "booted (safe)" : "booted");
 
   uint32_t last = millis(), lastHeapLog = 0;
+  xTaskCreatePinnedToCore(watchMain, "watch", 3072, nullptr, 2, nullptr, 0);
   for (;;) {
     uint32_t t0 = millis();
+    g_beat++;
+    g_crumb = "usb tick";
     usbdev::tick();
     syslog::drain();
+    g_crumb = "settings";
     settingsTick();
+    g_crumb = "hw tick";
     hwTick();
     if (millis() - lastHeapLog > 30000) {
       lastHeapLog = millis();
@@ -265,10 +305,13 @@ static void osMain() {
       usbdev::log(String("wifi: mode=") + (WiFi.getMode() == WIFI_OFF ? "off" : "on") +
                   " connected=" + (WiFi.status() == WL_CONNECTED ? "yes" : "no"));
     }
+    g_crumb = "keys";
     pollKeys();
     float dt = (t0 - last) / 1000.0f;
     last = t0;
+    g_crumb = "shell update";
     shell::update(dt);
+    g_crumb = "draw";
     if (g_screenshotPath.length() && !g_displayAsleep && !g_displayHold) {
       String path = g_screenshotPath;
       g_screenshotPath = "";
