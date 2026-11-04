@@ -37,10 +37,16 @@ end
 
 function app.init()
   sel, top, watching = 1, 1, nil
+  if cfg.get("dev_on") == "1" and not dev.running() then dev.start() end
+end
+
+function app.close()
+  if dev.running() then dev.stop() end
 end
 
 function app.update(dt)
   if not dev.running() then return end
+  dev.poll()
   peers = dev.peers()
   if watching then
     poll = poll - dt

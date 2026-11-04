@@ -8,9 +8,22 @@
 #include "storage.h"
 #include "usbdev.h"
 #include "mesh.h"
+#include "system.h"
+#include "vm.h"
 
 extern M5Canvas canvas;
 static Preferences cfgPrefs;
+static bool prefsOpen = false;
+static Preferences &prefs() {
+  if (!prefsOpen) { cfgPrefs.begin("liveos", false); prefsOpen = true; }
+  return cfgPrefs;
+}
+
+String cfgGet(const char *key, const char *def) {
+  Preferences &p = prefs();
+  return p.isKey(key) ? p.getString(key, def) : String(def);
+}
+void cfgSet(const char *key, const String &value) { prefs().putString(key, value); }
 
 static int num(lua_State *L, int i) { return (int)floorf((float)luaL_checknumber(L, i)); }
 static int ny(lua_State *L, int i) { return num(L, i) - g_bandY; }  // screen y -> band y
@@ -71,6 +84,10 @@ static int g_brightness(lua_State *L) {
 // The speaker is stopped at boot to free its DMA buffers and task; it starts on
 // the first sound.
 void hwUseSpeaker();  // hw.cpp: stops the mic, starts the speaker
+void playTone(uint16_t freq, uint32_t ms) {
+  hwUseSpeaker();
+  M5Cardputer.Speaker.tone(freq, ms);
+}
 static int s_tone(lua_State *L) {
   hwUseSpeaker();
   M5Cardputer.Speaker.tone((float)luaL_checknumber(L, 1), (uint32_t)luaL_optinteger(L, 2, 100));
@@ -102,19 +119,26 @@ static int y_millis(lua_State *L) { lua_pushinteger(L, (lua_Integer)(millis() & 
 static int y_delay(lua_State *L) { delay(constrain(num(L, 1), 0, 50)); return 0; }
 static int y_heap(lua_State *L) {
   lua_pushinteger(L, ESP.getFreeHeap());
-  lua_pushinteger(L, (lua_Integer)luaMemUsed());
+  lua_pushinteger(L, (lua_Integer)vm::memUsed());
   lua_pushinteger(L, (lua_Integer)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
   lua_pushinteger(L, (lua_Integer)heap_caps_get_total_size(MALLOC_CAP_8BIT));
   return 4;
 }
+void batteryInfo(int &pct, bool &charging) {
+  pct = constrain((int)M5Cardputer.Power.getBatteryLevel(), 0, 100);
+  charging = M5Cardputer.Power.isCharging() == m5::Power_Class::is_charging;
+}
 static int y_battery(lua_State *L) {
-  lua_pushinteger(L, constrain((int)M5Cardputer.Power.getBatteryLevel(), 0, 100));
-  lua_pushboolean(L, M5Cardputer.Power.isCharging() == m5::Power_Class::is_charging);
+  int pct;
+  bool chg;
+  batteryInfo(pct, chg);
+  lua_pushinteger(L, pct);
+  lua_pushboolean(L, chg);
   return 2;
 }
 static int y_reboot(lua_State *L) { ESP.restart(); return 0; }
 // The app draws straight to the panel (disp.*) and frames are not redrawn.
-static int y_display_hold(lua_State *L) { g_displayHold = lua_toboolean(L, 1); return 0; }
+static int y_display_hold(lua_State *L) { shell::setHold(lua_toboolean(L, 1)); return 0; }
 static int y_screenshot(lua_State *L) { g_screenshotPath = str(L, 1); return 0; }
 
 // Turns the panel off (backlight and controller sleep) and stops drawing.
@@ -131,13 +155,9 @@ static int y_display_sleep(lua_State *L) {
   }
   return 0;
 }
-static int y_reload(lua_State *L) { g_reloadRequested = true; return 0; }
+static int y_reload(lua_State *L) { shell::requestHome(); return 0; }
 static int y_log(lua_State *L) { usbdev::log(str(L, 1)); return 0; }
-static int y_recovered(lua_State *L) {
-  if (g_recoveredMsg.length()) lua_pushstring(L, g_recoveredMsg.c_str());
-  else lua_pushnil(L);
-  return 1;
-}
+static int y_recovered(lua_State *L) { lua_pushnil(L); return 1; }
 static int y_read_text(lua_State *L) {
   String buf;
   const char *p;
@@ -157,18 +177,17 @@ static int dumpWriter(lua_State *, const void *p, size_t sz, void *ud) {
 // when the file does not exist). loadfile(path, builtin_only, strip): strip
 // drops debug info (line numbers, local names), about 20% less RAM for code
 // that stays loaded.
-static int y_loadfile(lua_State *L) {
-  String path = str(L, 1);
-  bool strip = lua_toboolean(L, 3);
+bool loadChunk(lua_State *L, const String &path, bool builtinOnly, bool strip, String &err) {
   String buf;
   const char *p;
   size_t n;
-  if (!store::view(path, buf, p, n, lua_toboolean(L, 2))) { lua_pushnil(L); return 1; }
+  err = "";
+  if (!store::view(path, buf, p, n, builtinOnly)) return false;
   String chunk = "@" + path;
   if (luaL_loadbuffer(L, p, n, chunk.c_str()) != LUA_OK) {
-    lua_pushnil(L);
-    lua_insert(L, -2);
-    return 2;
+    err = lua_tostring(L, -1);
+    lua_pop(L, 1);
+    return false;
   }
   if (strip) {
     int fn = lua_gettop(L);
@@ -187,7 +206,16 @@ static int y_loadfile(lua_State *L) {
       lua_settop(L, fn);    // keep the unstripped chunk
     }
   }
-  return 1;
+  return true;
+}
+
+static int y_loadfile(lua_State *L) {
+  String err;
+  if (loadChunk(L, str(L, 1), lua_toboolean(L, 2), lua_toboolean(L, 3), err)) return 1;
+  lua_pushnil(L);
+  if (!err.length()) return 1;
+  lua_pushstring(L, err.c_str());
+  return 2;
 }
 static int y_read_builtin(lua_State *L) {
   String buf;
@@ -253,15 +281,15 @@ static int y_storage(lua_State *L) {
 // ---------------------------------------------------------------- cfg
 static int c_get(lua_State *L) {
   String k = str(L, 1);
-  if (!cfgPrefs.isKey(k.c_str())) { lua_pushnil(L); return 1; }
-  lua_pushstring(L, cfgPrefs.getString(k.c_str(), "").c_str());
+  if (!prefs().isKey(k.c_str())) { lua_pushnil(L); return 1; }
+  lua_pushstring(L, prefs().getString(k.c_str(), "").c_str());
   return 1;
 }
 static int c_set(lua_State *L) {
   String k = str(L, 1);
   if (k.length() > 15) return luaL_error(L, "cfg key too long (max 15)");
-  if (lua_isnil(L, 2)) cfgPrefs.remove(k.c_str());
-  else cfgPrefs.putString(k.c_str(), luaL_tolstring(L, 2, nullptr));
+  if (lua_isnil(L, 2)) prefs().remove(k.c_str());
+  else prefs().putString(k.c_str(), luaL_tolstring(L, 2, nullptr));
   return 0;
 }
 
@@ -271,28 +299,33 @@ static uint32_t wifiStart = 0;
 
 // Returns whether the radio is now in the requested state. Starting it needs
 // ~40-50 KB, so Lua garbage is collected first and the outcome is logged.
-static int w_enable(lua_State *L) {
-  if (lua_toboolean(L, 1)) {
-    lua_gc(L, LUA_GCCOLLECT);
+bool wifiEnable(bool on) {
+  if (on) {
     size_t before = heap_caps_get_free_size(MALLOC_CAP_8BIT);
     bool ok = WiFi.mode(WIFI_STA) && WiFi.getMode() != WIFI_OFF;
     usbdev::log(String("wifi start ") + (ok ? "ok" : "FAILED") + ": free before=" + before +
                 " after=" + heap_caps_get_free_size(MALLOC_CAP_8BIT));
-    lua_pushboolean(L, ok);
-    return 1;
-  } else {
-    wifiConnecting = false;
-    WiFi.disconnect(true);
-    WiFi.mode(mesh::running() ? WIFI_STA : WIFI_OFF);  // device sharing needs the radio
+    return ok;
   }
-  lua_pushboolean(L, 1);
+  wifiConnecting = false;
+  WiFi.disconnect(true);
+  WiFi.mode(mesh::running() ? WIFI_STA : WIFI_OFF);  // device sharing needs the radio
+  return true;
+}
+void wifiConnect(const char *ssid, const char *pass) {
+  WiFi.begin(ssid, pass);
+  wifiConnecting = true;
+  wifiStart = millis();
+}
+// Apps should start Wi-Fi through shell.wifi_start (it checks memory first).
+static int w_enable(lua_State *L) {
+  if (lua_toboolean(L, 1)) lua_gc(L, LUA_GCCOLLECT);
+  lua_pushboolean(L, wifiEnable(lua_toboolean(L, 1)));
   return 1;
 }
 static int w_connect(lua_State *L) {
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(str(L, 1).c_str(), lua_isnoneornil(L, 2) ? "" : str(L, 2).c_str());
-  wifiConnecting = true;
-  wifiStart = millis();
+  if (WiFi.getMode() == WIFI_OFF && !wifiEnable(true)) return 0;
+  wifiConnect(str(L, 1).c_str(), lua_isnoneornil(L, 2) ? "" : str(L, 2).c_str());
   return 0;
 }
 static int w_disconnect(lua_State *L) {
@@ -425,8 +458,7 @@ static void add(lua_State *L, const char *name, const luaL_Reg *fns) {
 }
 
 void registerApi(lua_State *L) {
-  static bool prefsOpen = false;
-  if (!prefsOpen) { cfgPrefs.begin("liveos", false); prefsOpen = true; }
+  prefs();
 
   static const luaL_Reg gfxLib[] = {
       {"rgb", g_rgb}, {"clear", g_clear}, {"px", g_px}, {"line", g_line}, {"rect", g_rect}, {"fill", g_fill},

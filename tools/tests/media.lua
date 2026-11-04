@@ -35,7 +35,7 @@ local real_text, real_rfill = gfx.text, gfx.rfill
 gfx.text = function(x, y, s, ...) if capturing then drawn[#drawn + 1] = tostring(s) end; return real_text(x, y, s, ...) end
 gfx.rfill = function(x, y, ...) if capturing and y == 125 then footer_seen = true end; return real_rfill(x, y, ...) end
 
-dofile("userland/boot.lua")
+dofile("tools/emu/boot.lua")
 
 local toasts, sounds = {}, {}
 local real_toast, real_sound = shell.toast, shell.sound

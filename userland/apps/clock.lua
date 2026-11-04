@@ -127,14 +127,12 @@ local function delete_alarm()
 end
 
 -- ---------------------------------------------------------------- pomodoro
--- Starts one phase. The done callback starts the next one even when this app
--- is closed, so it only uses its own arguments and the shell.
+-- Starts one phase. The shell chains the phases itself (work -> break ->
+-- work ...), so the cycle keeps going after this app is closed.
 local function pomo_phase(phase, count)
   local work = phase == "work"
-  local h = shell.start_timer(work and WORK or REST, work and "Pomodoro work" or "Pomodoro break")
-  h.pomo, h.count = phase, count
-  h.done = function() pomo_phase(work and "break" or "work", work and count + 1 or count) end
-  return h
+  return shell.start_timer(work and WORK or REST, work and "Pomodoro work" or "Pomodoro break",
+    { pomo = phase, count = count, work = WORK, rest = REST })
 end
 
 local function find_pomo()

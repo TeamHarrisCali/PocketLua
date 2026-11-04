@@ -11,7 +11,7 @@ gfx.text = function(x, y, s, ...) drawn[#drawn + 1] = s; return real_text(x, y, 
 local held = false
 sys.display_hold = function(on) held = on and true or false end
 
-dofile("userland/boot.lua")
+dofile("tools/emu/boot.lua")
 
 local fails, passes = 0, 0
 local function check(c, m)

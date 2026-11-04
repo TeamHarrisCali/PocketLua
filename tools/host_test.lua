@@ -6,12 +6,14 @@ local removed = {}
 local draws = 0
 
 local function exists_file(p)
-  local f = io.open(p, "rb")
+  local f = io.open(p, "rb") or io.open((p:gsub("^userland/", "tools/emu/")), "rb")
   if f then f:close() return true end
 end
 
+-- The OS itself is native on the device; tools/emu holds a Lua stand-in
+-- (shell, ui, home, dialogs) used to run the apps here.
 local function readf(p)
-  local f = io.open(p, "rb")
+  local f = io.open(p, "rb") or io.open((p:gsub("^userland/", "tools/emu/")), "rb")
   if not f then return nil end
   local s = f:read("a")
   f:close()
@@ -150,7 +152,7 @@ end
 local function type_text(s) for c in s:gmatch(".") do key(c) end end
 
 -- ------------------------------------------------------------ boot
-dofile(ROOT .. "boot.lua")
+dofile("tools/emu/boot.lua")
 frames(5)
 check(shell.app() == "home", "boots to home")
 
@@ -321,6 +323,7 @@ key("enter"); key("enter")   -- menu on kitchen, Ping
 frames(4)
 check(shell.app() == "nearby", "nearby app opens a device menu")
 shell.home(); frames(2)
+local dev = require("dev")  -- sharing stops when Nearby closes, so load the module again
 local rt = dev.deserialize(dev.serialize({ a = 1, b = { "x", true }, s = "q\"\n" }))
 check(rt and rt.a == 1 and rt.b[1] == "x" and rt.s == "q\"\n", "serialization round trip")
 check(dev.deserialize("os.exit()") == nil, "deserializer refuses code")
@@ -332,7 +335,7 @@ check(table.concat(usb_out):find("# boot"), "console can dump the device log")
 -- a truncated saved copy of a system file must not stop the OS from booting
 local full_ui = readf(ROOT .. "lib/ui.lua")
 overlay["lib/ui.lua"] = full_ui:sub(1, 1994)   -- cut off mid-function, like the reported error
-dofile(ROOT .. "boot.lua")
+dofile("tools/emu/boot.lua")
 check(#boot_notes == 1 and boot_notes[1]:find("lib/ui.lua"), "fallback to the built-in copy is recorded for the user")
 frames(3)
 check(shell.app() == "home", "boots to home even with a truncated saved ui.lua")

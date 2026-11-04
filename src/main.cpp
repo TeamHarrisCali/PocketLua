@@ -1,167 +1,35 @@
-// LiveOS: a live-editable shell for the Cardputer ADV. The C++ core owns the
-// hardware and the Lua VM; everything the user sees is Lua that can be edited
-// on the device. Runs as a normal app image, so M5Launcher can start it.
+// LiveOS for the Cardputer ADV. The OS itself (desktop, drawer, system UI,
+// services) is native code in system.cpp; apps are live-editable Lua that
+// runs in a VM created only while the app is open (vm.cpp).
+// Runs as a normal app image, so M5Launcher can start it.
 #include <M5Cardputer.h>
-#include <lua.hpp>
 #include <esp_heap_caps.h>
-#include <functional>
+#include <Preferences.h>
 #include "bindings.h"
 #include "embedded.h"
-#include "storage.h"
-#include "usbdev.h"
 #include "hw.h"
 #include "luapool.h"
-#include <Preferences.h>
+#include "storage.h"
+#include "system.h"
+#include "usbdev.h"
+#include "vm.h"
 
 // A quarter-screen frame buffer (16 KB instead of 65 KB): each frame is drawn
-// in four bands, with g_bandY telling the drawing calls which band.
+// in four bands; g_bandY tells the drawing code which band it is.
 M5Canvas canvas(&M5Cardputer.Display);
-static const int BAND_H = (SCREEN_H + 3) / 4;  // 4 bands: 16 KB buffer
+static const int BAND_H = (SCREEN_H + 3) / 4;
 int g_bandY = 0;
-bool g_displayAsleep = false;  // set by sys.display_sleep(); skips drawing
-bool g_displayHold = false;    // set by sys.display_hold(); the app draws directly
-String g_screenshotPath;       // set by sys.screenshot(); taken on the next frame
-bool g_reloadRequested = false;
-String g_recoveredMsg;
+int g_bandH = BAND_H;
+bool g_displayAsleep = false;  // display sleep: nothing is drawn
+bool g_displayHold = false;    // an app draws straight to the panel
+String g_screenshotPath;       // taken on the next frame
 
-static lua_State *L = nullptr;
-static size_t memUsed = 0;
-// Scripts may use up to MEM_LIMIT, but never push free internal RAM below
-// HEAP_RESERVE: Wi-Fi, USB and the SD driver allocate at run time and the
-// ESP32-S3 here has no PSRAM to fall back on.
-static const size_t MEM_LIMIT = 160 * 1024;
-static const size_t HEAP_RESERVE = 20 * 1024;
-static const uint32_t CALL_BUDGET_MS = 2500;
-static uint32_t callStart = 0;
-static bool timedOut = false;
-static String lastError;
-static int failStreak = 0;
-
-size_t luaMemUsed() { return memUsed; }
-
-// ---------------------------------------------------------------- Lua VM
-static void releaseBlock(void *p, size_t size) {
-  if (size <= luapool::MAX_SMALL) luapool::release(p, size);
-  else free(p);
-}
-
-// Lua passes the old block size with every free/realloc, so small blocks are
-// routed to the pool (see luapool.h) and larger ones to the normal heap.
-static void *luaAlloc(void *, void *ptr, size_t osize, size_t nsize) {
-  if (ptr == nullptr) osize = 0;
-  if (nsize == 0) {
-    if (ptr) { memUsed -= osize; releaseBlock(ptr, osize); }
-    return nullptr;
-  }
-  if (nsize > osize) {
-    size_t grow = nsize - osize;
-    if (memUsed + grow > MEM_LIMIT) return nullptr;
-    if (heap_caps_get_free_size(MALLOC_CAP_8BIT) < grow + HEAP_RESERVE) return nullptr;
-  }
-  bool oldSmall = ptr && osize <= luapool::MAX_SMALL;
-  bool newSmall = nsize <= luapool::MAX_SMALL;
-  void *p;
-  if (!ptr) {
-    p = newSmall ? luapool::alloc(nsize) : malloc(nsize);
-  } else if (oldSmall && newSmall && luapool::sameClass(osize, nsize)) {
-    p = ptr;
-  } else if (!oldSmall && !newSmall) {
-    p = realloc(ptr, nsize);
-  } else {
-    p = newSmall ? luapool::alloc(nsize) : malloc(nsize);
-    if (p) {
-      memcpy(p, ptr, osize < nsize ? osize : nsize);
-      releaseBlock(ptr, osize);
-    }
-  }
-  if (p) memUsed = memUsed - osize + nsize;
-  return p;
-}
-
-// A script that never returns would freeze the whole device, so fail it instead.
-static void luaHook(lua_State *Ls, lua_Debug *) {
-  if (!timedOut && millis() - callStart > CALL_BUDGET_MS) {
-    timedOut = true;
-    luaL_error(Ls, "script timed out (no return after %d ms)", (int)CALL_BUDGET_MS);
-  }
-}
-
-static void logHeap(const char *tag);
-
-void luaBudgetReset() { callStart = millis(); }
-
-static bool pcallTimed(int nargs) {
-  callStart = millis();
-  timedOut = false;
-  if (lua_pcall(L, nargs, 0, 0) != LUA_OK) {
-    lastError = lua_tostring(L, -1) ? lua_tostring(L, -1) : "unknown error";
-    usbdev::log("lua error: " + lastError);
-    if (failStreak == 0) logHeap("at error");
-    lua_pop(L, 1);
-    return false;
-  }
-  return true;
-}
-
-static bool callGlobal(const char *name, const std::function<int(lua_State *)> &push) {
-  int top = lua_gettop(L);
-  lua_getglobal(L, name);
-  if (!lua_isfunction(L, -1)) { lua_settop(L, top); return true; }
-  int n = push ? push(L) : 0;
-  bool ok = pcallTimed(n);
-  lua_settop(L, top);
-  return ok;
-}
+size_t luaMemUsed() { return vm::memUsed(); }
 
 static void logHeap(const char *tag) {
   usbdev::log(String("heap ") + tag + ": free=" + ESP.getFreeHeap() + " largest=" +
-              heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + " lua=" + memUsed +
+              heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + " lua=" + vm::memUsed() +
               " pool=" + luapool::pageBytes() + " stack_free=" + uxTaskGetStackHighWaterMark(nullptr));
-}
-
-static bool bootLua(bool safe) {
-  store::safeMode = safe;
-  memUsed = 0;
-  L = lua_newstate(luaAlloc, nullptr);
-  if (!L) { lastError = "out of memory"; return false; }
-  luaL_requiref(L, "_G", luaopen_base, 1);
-  luaL_requiref(L, LUA_TABLIBNAME, luaopen_table, 1);
-  luaL_requiref(L, LUA_STRLIBNAME, luaopen_string, 1);
-  luaL_requiref(L, LUA_MATHLIBNAME, luaopen_math, 1);
-  luaL_requiref(L, LUA_UTF8LIBNAME, luaopen_utf8, 1);
-  luaL_requiref(L, LUA_COLIBNAME, luaopen_coroutine, 1);
-  lua_settop(L, 0);
-  lua_pushnil(L); lua_setglobal(L, "dofile");
-  lua_pushnil(L); lua_setglobal(L, "loadfile");
-  lua_sethook(L, luaHook, LUA_MASKCOUNT, 20000);
-  registerApi(L);
-  registerHw(L);
-
-  String buf;
-  const char *src;
-  size_t srcLen;
-  if (!store::view("boot.lua", buf, src, srcLen)) { lastError = "boot.lua missing"; return false; }
-  if (luaL_loadbuffer(L, src, srcLen, "@boot.lua") != LUA_OK) {
-    lastError = lua_tostring(L, -1);
-    return false;
-  }
-  return pcallTimed(0);
-}
-
-static void closeLua() {
-  if (L) lua_close(L);
-  L = nullptr;
-}
-
-// gfx.band_y / gfx.band_h tell Lua which rows the current band covers, so
-// drawing code can skip what lies outside it (ui.visible).
-static void setBand() {
-  lua_getglobal(L, "gfx");
-  lua_pushinteger(L, g_bandY);
-  lua_setfield(L, -2, "band_y");
-  lua_pushinteger(L, BAND_H);
-  lua_setfield(L, -2, "band_h");
-  lua_pop(L, 1);
 }
 
 // Renders the next frame band by band into a 24-bit BMP (top-down rows).
@@ -181,8 +49,7 @@ static bool writeScreenshot(const String &path) {
   f.write(h, 54);
   uint8_t row[SCREEN_W * 3];
   for (g_bandY = 0; g_bandY < SCREEN_H; g_bandY += BAND_H) {
-    setBand();
-    callGlobal("on_draw", nullptr);
+    shell::drawBand();
     for (int y = 0; y < BAND_H && g_bandY + y < SCREEN_H; y++) {
       for (int x = 0; x < SCREEN_W; x++) {
         uint16_t c = canvas.readPixel(x, y);
@@ -201,16 +68,6 @@ static bool writeScreenshot(const String &path) {
 
 // Static screens draw straight to the display; the frame buffer is only half
 // the screen tall.
-static void showFatal(const String &msg) {
-  auto &d = M5Cardputer.Display;
-  d.fillScreen(TFT_BLACK);
-  d.setTextSize(1);
-  d.setTextColor(TFT_RED);
-  d.drawString("LiveOS could not start", 4, 4);
-  d.setTextColor(TFT_WHITE);
-  for (int i = 0, y = 20; i < (int)msg.length() && y < 125; i += 38, y += 10)
-    d.drawString(msg.substring(i, i + 38), 4, y);
-}
 
 // ---------------------------------------------------------------- keyboard
 // Fixed-size key records: this runs every frame while a key is held, so it
@@ -233,16 +90,8 @@ static void setKey(KeyEv &e, const char *key, char text) {
 }
 
 static void emitKey(const KeyEv &e, const Keyboard_Class::KeysState &st) {
-  callGlobal("on_key", [&](lua_State *Ls) {
-    lua_createtable(Ls, 0, 6);
-    lua_pushstring(Ls, e.key); lua_setfield(Ls, -2, "key");
-    if (e.text[0]) { lua_pushstring(Ls, e.text); lua_setfield(Ls, -2, "text"); }
-    lua_pushboolean(Ls, st.ctrl); lua_setfield(Ls, -2, "ctrl");
-    lua_pushboolean(Ls, st.shift); lua_setfield(Ls, -2, "shift");
-    lua_pushboolean(Ls, st.fn); lua_setfield(Ls, -2, "fn");
-    lua_pushboolean(Ls, st.alt); lua_setfield(Ls, -2, "alt");
-    return 1;
-  });
+  shell::Key k = {e.key, e.text[0] ? e.text : nullptr, st.ctrl, st.shift, st.fn, st.alt};
+  shell::key(k);
 }
 
 static int currentKeys(const Keyboard_Class::KeysState &st, KeyEv *cur) {
@@ -329,26 +178,22 @@ static void splash() {
   d.drawString("hold S for safe mode", 66, 90);
 }
 
-static void osTask(void *) {
+
+static void osMain() {
   auto cfg = M5.config();
   cfg.internal_mic = true;  // configures the codec pins; started only when an app records
   logHeap("start");
   M5Cardputer.begin(cfg, true);
-  M5Cardputer.Speaker.end();  // started on the first sound (see snd.tone)
+  M5Cardputer.Speaker.end();  // started on the first sound
   M5Cardputer.Mic.end();
-  logHeap("after M5 begin");
   M5Cardputer.Display.setRotation(1);
   M5Cardputer.Display.setFont(&fonts::Font0);
   M5Cardputer.Display.setTextDatum(top_left);
   canvas.createSprite(SCREEN_W, BAND_H);
   canvas.setFont(&fonts::Font0);
   canvas.setTextDatum(top_left);
-  logHeap("after frame buffer");
-  M5Cardputer.Speaker.setVolume(100);
-
   splash();
   store::begin();
-  logHeap("after storage");
   {
     // USB classes are chosen in Settings and take effect at boot.
     Preferences p;
@@ -362,48 +207,20 @@ static void osTask(void *) {
     usbdev::begin(kbd, drive, serial, console, mouse);
     usbdev::log(String("LiveOS boot, storage=") + store::kind() + ", embedded files=" + (int)EMBEDDED_COUNT);
   }
-  logHeap("after usb");
   bool safe = false;
   for (int i = 0; i < 12; i++) {
     if (safeKeyHeld()) safe = true;
     delay(60);
   }
-
-  while (!bootLua(safe)) {
-    String err = lastError;
-    closeLua();
-    if (!safe) {
-      usbdev::log("boot failed, retrying in safe mode: " + err);
-      g_recoveredMsg = err;
-      safe = true;
-      continue;
-    }
-    showFatal(err);
-    for (;;) { usbdev::tick(); delay(50); }  // keep the USB log readable
-  }
-
+  store::safeMode = safe;
+  shell::begin(safe);
   logHeap(safe ? "booted (safe)" : "booted");
-  uint32_t last = millis();
+
+  uint32_t last = millis(), lastHeapLog = 0;
   for (;;) {
     uint32_t t0 = millis();
-    if (g_reloadRequested) {
-      g_reloadRequested = false;
-      closeLua();
-      while (!bootLua(safe)) {
-        g_recoveredMsg = lastError;
-        closeLua();
-        if (safe) {
-          showFatal(lastError);
-          for (;;) { usbdev::tick(); delay(50); }  // keep the USB log readable
-        }
-        safe = true;
-      }
-      failStreak = 0;
-    }
-
     usbdev::tick();
-    store::idleTick();
-    static uint32_t lastHeapLog = 0;
+    hwTick();
     if (millis() - lastHeapLog > 30000) {
       lastHeapLog = millis();
       logHeap("periodic");
@@ -411,52 +228,29 @@ static void osTask(void *) {
     pollKeys();
     float dt = (t0 - last) / 1000.0f;
     last = t0;
-    bool ok = callGlobal("on_frame", [&](lua_State *Ls) { lua_pushnumber(Ls, dt); return 1; });
-    hwTick();
+    shell::update(dt);
     if (g_screenshotPath.length() && !g_displayAsleep && !g_displayHold) {
       String path = g_screenshotPath;
       g_screenshotPath = "";
-      bool shot = writeScreenshot(path);
-      callGlobal("on_screenshot", [&](lua_State *Ls) {
-        lua_pushstring(Ls, path.c_str());
-        lua_pushboolean(Ls, shot);
-        return 2;
-      });
+      shell::screenshotDone(path, writeScreenshot(path));
     } else if (!g_displayAsleep && !g_displayHold) {
       for (g_bandY = 0; g_bandY < SCREEN_H; g_bandY += BAND_H) {
-        setBand();
-        ok = callGlobal("on_draw", nullptr) && ok;
+        shell::drawBand();
         canvas.pushSprite(0, g_bandY);
       }
       g_bandY = 0;
     }
-
-    // The shell catches app errors itself; an error reaching here means the
-    // shell is broken, so fall back to the built-in one after repeated failures.
-    failStreak = ok ? 0 : failStreak + 1;
-    if (failStreak >= 3 && !safe) {
-      g_recoveredMsg = lastError;
-      safe = true;
-      g_reloadRequested = true;
-    } else if (failStreak >= 3) {
-      showFatal(lastError);
-      delay(2000);
-    }
-
-    // asleep: nothing is drawn, so poll less often and save battery
-    uint32_t frameMs = g_displayAsleep ? 100 : 33;
+    uint32_t frameMs = g_displayAsleep ? 100 : 33;  // asleep: poll less, save battery
     uint32_t el = millis() - t0;
     if (el < frameMs) delay(frameMs - el);
   }
 }
 
-// The OS runs on Arduino's own loop task (with a larger stack) instead of a
-// second task, which saves that task's stack.
 SET_LOOP_TASK_STACK_SIZE(20 * 1024);  // Lua C-call depth is capped (LUAI_MAXCCALLS) to fit
 
 void setup() {
   Serial.begin(115200);
-  osTask(nullptr);  // never returns
+  osMain();  // never returns
 }
 
-void loop() { vTaskDelay(pdMS_TO_TICKS(1000)); }
+void loop() {}

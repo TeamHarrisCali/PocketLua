@@ -29,7 +29,7 @@ local function frames(n) for _ = 1, n or 5 do on_frame(0.033); on_draw(); on_dra
 
 local base = live()
 peak = 0
-dofile("userland/boot.lua")
+dofile("tools/emu/boot.lua")
 frames()
 report("boot + home")
 

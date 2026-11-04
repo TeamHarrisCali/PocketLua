@@ -108,13 +108,18 @@ function shell.mark_read() ui.status.unread = 0 end
 local timers = {}
 shell.timers = timers
 
-function shell.start_timer(seconds, label)
-  timers[#timers + 1] = { left = seconds, total = seconds, label = label or "Timer" }
-  return timers[#timers]
+local next_id = 1
+function shell.start_timer(seconds, label, opts)
+  local t = { id = next_id, left = seconds, total = seconds, label = label or "Timer" }
+  next_id = next_id + 1
+  if opts then t.pomo, t.count, t.work, t.rest = opts.pomo, opts.count or 0, opts.work, opts.rest end
+  timers[#timers + 1] = t
+  return t
 end
 
 function shell.cancel_timer(t)
-  for i, x in ipairs(timers) do if x == t then table.remove(timers, i); return end end
+  local id = type(t) == "table" and t.id or t
+  for i, x in ipairs(timers) do if x == t or x.id == id then table.remove(timers, i); return end end
 end
 
 local function timer_tick(dt)
@@ -126,6 +131,11 @@ local function timer_tick(dt)
       shell.wake()
       shell.notify(t.label .. " done", nil, "alarm")
       if t.done then pcall(t.done) end
+      if t.pomo then  -- the Pomodoro cycle continues on its own (as on the device)
+        local work = t.pomo == "work"
+        shell.start_timer(work and t.rest or t.work, work and "Pomodoro break" or "Pomodoro work",
+          { pomo = work and "break" or "work", count = work and t.count + 1 or t.count, work = t.work, rest = t.rest })
+      end
     end
   end
 end

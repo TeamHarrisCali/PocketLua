@@ -3,7 +3,7 @@
 local say = print
 local src = assert(io.open("tools/host_test.lua")):read("a")
 assert(load(src:match("^(.-)%-%- %-+ helpers"), "=stubs"))()
-dofile("userland/boot.lua")
+dofile("tools/emu/boot.lua")
 
 local fails, oks = 0, 0
 local function check(c, m)

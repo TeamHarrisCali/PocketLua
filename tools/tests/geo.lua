@@ -3,7 +3,7 @@
 local say = print
 local src = assert(io.open("tools/host_test.lua")):read("a")
 assert(load(src:match("^(.-)%-%- %-+ helpers"), "=stubs"))()
-dofile("userland/boot.lua")
+dofile("tools/emu/boot.lua")
 local fails = 0
 local function check(c, m) if c then say("ok:   " .. m) else fails = fails + 1; say("FAIL: " .. m) end end
 local function frames(n) for _ = 1, n or 3 do on_frame(0.033); on_draw(); on_draw(); on_draw() end end

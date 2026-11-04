@@ -3,7 +3,7 @@
 local say = print
 local src = assert(io.open("tools/host_test.lua")):read("a")
 assert(load(src:match("^(.-)%-%- %-+ helpers"), "=stubs"))()
-dofile("userland/boot.lua")
+dofile("tools/emu/boot.lua")
 
 local fails = 0
 local function check(c, m) if c then say("ok:   " .. m) else fails = fails + 1; say("FAIL: " .. m) end end
