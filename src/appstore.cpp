@@ -289,19 +289,15 @@ struct Entry {
   long srcSize = 0, codeSize = 0;
 };
 
-// Parses catalog.txt; firmware fills build/size/sha.
+// Parses catalog.txt line by line from the card (no copy of the whole file:
+// with an app open the heap may not have a 12 KB block); firmware fills
+// build/size/sha.
 bool readCatalog(std::vector<Entry> &out, String &fwBuild, long &fwSize, String &fwSha) {
-  String buf;
-  const char *p;
-  size_t n;
-  if (!store::view(CATALOG, buf, p, n, false, 32768) || !buf.length()) return false;
-  const String &text = buf;  // view() read the card's file into buf: parse it in place
-  int at = 0;
-  while (at < (int)text.length()) {
-    int nl = text.indexOf('\n', at);
-    if (nl < 0) nl = text.length();
-    String line = text.substring(at, nl);
-    at = nl + 1;
+  File file = store::openStored(CATALOG);
+  if (!file) return false;
+  String line;
+  uint8_t buf[256];
+  auto parse = [&]() {
     std::vector<String> f;
     int s = 0;
     while (true) {
@@ -323,7 +319,16 @@ bool readCatalog(std::vector<Entry> &out, String &fwBuild, long &fwSize, String 
       e.srcSize = f[2].toInt(); e.srcSha = f[3]; e.codeSize = f[4].toInt(); e.codeSha = f[5];
       out.push_back(e);
     }
+  };
+  int n;
+  while ((n = file.read(buf, sizeof buf)) > 0) {
+    for (int i = 0; i < n; i++) {
+      if (buf[i] == '\n') { if (line.length()) parse(); line = ""; }
+      else if (line.length() < 600) line += (char)buf[i];
+    }
   }
+  if (line.length()) parse();
+  file.close();
   return true;
 }
 

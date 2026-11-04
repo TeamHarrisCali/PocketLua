@@ -20,9 +20,10 @@ static bool needScan = false;
 static volatile int pins = 0;
 static uint32_t lastUse = 0;
 
-// 3 open files: the library rescan's old index, new index, and the file
-// whose tags it reads (playback is stopped while it runs). Each costs RAM.
-static bool sdMount() { return SD.begin(12, SPI, 25000000, "/sd", 3); }
+// 2 open files at most: each one reserves ~4 KB of RAM for as long as the
+// card is mounted. (MP3 playback holds one; the music library rescan opens
+// its files one after another.)
+static bool sdMount() { return SD.begin(12, SPI, 25000000, "/sd", 2); }
 
 static void scanOverrides();
 bool remove(const String &rel);

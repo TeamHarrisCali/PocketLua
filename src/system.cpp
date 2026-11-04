@@ -487,6 +487,8 @@ static void launch(const String &name, const String &path, int line, bool return
   appTitle = name;
   if (const AppInfo *a = findApp(name)) appTitle = a->title;
   if (vm::arenaFree() < MIN_FREE_TO_OPEN) { fail("not enough memory to open " + name); return; }
+  usbdev::log(String("open ") + name + ": heap free=" + heap_caps_get_free_size(MALLOC_CAP_8BIT) + " largest=" +
+              heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + " arena free=" + vm::arenaFree());
   if (!vm::open()) { fail(vm::lastError); return; }
   vmGen++;
   lua_State *L = vm::L;

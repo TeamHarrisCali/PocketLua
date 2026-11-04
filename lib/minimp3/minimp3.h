@@ -234,7 +234,11 @@ typedef struct
     bs_t bs;
     uint8_t maindata[MAX_BITRESERVOIR_BYTES + MAX_L3_FRAME_PAYLOAD_BYTES];
     L3_gr_info_t gr_info[4];
+#ifdef MINIMP3_SCRATCH  /* LiveOS: the two big arrays live in their own heap blocks (8.4 + 4.6 KB) */
+    float (*grbuf)[576], scf[40], (*syn)[2*32];
+#else
     float grbuf[2][576], scf[40], syn[18 + 15][2*32];
+#endif
     uint8_t ist_pos[2][39];
 } mp3dec_scratch_t;
 

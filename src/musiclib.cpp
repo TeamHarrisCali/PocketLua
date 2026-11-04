@@ -362,6 +362,7 @@ static void scanTask(void *) {
       }
       std::sort(old, old + nOld, [](const Old &a, const Old &b) { return a.h < b.h; });
     }
+    if (oldF) oldF.close();  // reopened per reused record: the card allows 2 open files
     tmp = fs->open(libDir + "/tracks.tmp", "w");
     ok = (bool)tmp;
   }
@@ -403,11 +404,14 @@ static void scanTask(void *) {
     uint32_t h = fnv(path.c_str());
     Old *hit = std::lower_bound(old, old + nOld, Old{h, 0}, [](const Old &a, const Old &b) { return a.h < b.h; });
     bool reused = false;
-    if (hit < old + nOld && hit->h == h && oldF.seek((size_t)hit->row * REC) && oldF.read((uint8_t *)rec, REC) == REC) {
+    if (hit < old + nOld && hit->h == h && (oldF = fs->open(libDir + "/tracks.dat", "r")) &&
+        oldF.seek((size_t)hit->row * REC) && oldF.read((uint8_t *)rec, REC) == REC) {
+      oldF.close();
       rec[REC - 1] = 0;
       for (int k = REC - 2; k >= 0 && rec[k] == ' '; k--) rec[k] = 0;
       if (!strncmp(rec, path.c_str(), path.length()) && rec[path.length()] == '\t') { line = rec; reused = true; }
     }
+    if (oldF) oldF.close();
     if (!reused) {
       Tags t;
       readTags("data/music/" + path, t);

@@ -250,28 +250,46 @@ static void playTask(void *) {
 }
 
 // MP3 playback, mixed to mono (the ADV has one speaker and a mono DAC). About
-// 38 KB while playing, in five blocks so a fragmented heap can still fit it;
-// all of it is freed when playback ends.
+// 38 KB while playing, all of it freed when playback ends. No single block is
+// over 8.4 KB: with Wi-Fi off the heap has room, but in pieces (one 16 KB
+// block was often not to be had), so the decoder's scratch arrays and the
+// three output frames are separate blocks.
 static const size_t MP3_IN = 4096, MP3_FRAME = 1152;
+static const size_t GRBUF = 2 * 576 * sizeof(float), SYN = (18 + 15) * 2 * 32 * sizeof(float);
 static mp3dec_t *mDec = nullptr;
 static uint8_t *mIn = nullptr;
-static int16_t *mPcm = nullptr, *mOut = nullptr;  // mOut: 3 mono frames
+static int16_t *mPcm = nullptr, *mOut[3] = {nullptr, nullptr, nullptr};  // three mono frames
 static int mInLen = 0;
 static uint32_t mKbps = 0, mXingBytes = 0;
 static uint8_t *mToc = nullptr;  // Xing seek table (100 bytes), VBR files only
 
 static void mp3Free() {
-  free(mDec); free(mp3Scratch); free(mIn); free(mPcm); free(mOut); free(mToc);
-  mDec = nullptr; mp3Scratch = nullptr; mIn = nullptr; mPcm = mOut = nullptr; mToc = nullptr;
+  if (mp3Scratch) {
+    mp3dec_scratch_t *sc = (mp3dec_scratch_t *)mp3Scratch;
+    free(sc->grbuf);
+    free(sc->syn);
+  }
+  free(mDec); free(mp3Scratch); free(mIn); free(mPcm); free(mToc);
+  for (auto &o : mOut) { free(o); o = nullptr; }
+  mDec = nullptr; mp3Scratch = nullptr; mIn = nullptr; mPcm = nullptr; mToc = nullptr;
 }
 
 static bool mp3Alloc() {
   mDec = (mp3dec_t *)malloc(sizeof(mp3dec_t));
-  mp3Scratch = malloc(sizeof(mp3dec_scratch_t));
+  mp3Scratch = calloc(1, sizeof(mp3dec_scratch_t));
+  if (mp3Scratch) {
+    mp3dec_scratch_t *sc = (mp3dec_scratch_t *)mp3Scratch;
+    sc->grbuf = (float (*)[576])malloc(GRBUF);
+    sc->syn = (float (*)[2 * 32])malloc(SYN);
+  }
   mIn = (uint8_t *)malloc(MP3_IN);
   mPcm = (int16_t *)malloc(MINIMP3_MAX_SAMPLES_PER_FRAME * 2);
-  mOut = (int16_t *)malloc(3 * MP3_FRAME * 2);
-  if (mDec && mp3Scratch && mIn && mPcm && mOut) { mp3dec_init(mDec); mInLen = 0; return true; }
+  for (auto &o : mOut) o = (int16_t *)malloc(MP3_FRAME * 2);
+  bool ok = mDec && mp3Scratch && ((mp3dec_scratch_t *)mp3Scratch)->grbuf && ((mp3dec_scratch_t *)mp3Scratch)->syn &&
+            mIn && mPcm && mOut[0] && mOut[1] && mOut[2];
+  if (ok) { mp3dec_init(mDec); mInLen = 0; return true; }
+  usbdev::log(String("mp3: not enough memory, heap free=") + heap_caps_get_free_size(MALLOC_CAP_8BIT) + " largest=" +
+              heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
   mp3Free();
   return false;
 }
@@ -334,7 +352,7 @@ static void mp3Task(void *) {
     if (aSeekTo >= 0) { uint32_t at = aSeekTo; aSeekTo = -1; mp3Seek(at); }
     if (aPaused) { pausedWait(); continue; }
     // three buffers: one playing, one queued, one being decoded
-    int16_t *o = mOut + idx * MP3_FRAME;
+    int16_t *o = mOut[idx];
     int n = mp3Next(o, info);
     if (n <= 0) break;
     while (M5Cardputer.Speaker.isPlaying(0) >= 2 && !aStop && !aPaused && aSeekTo < 0) vTaskDelay(1);
