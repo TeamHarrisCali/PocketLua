@@ -440,7 +440,11 @@ bool ensureTask() {
     return false;
   }
   quit = false;
-  task = handle = xTaskCreateStaticPinnedToCore(taskMain, "discord", STACK_WORDS, nullptr, 1, stack, &tcb, 0);
+  // Priority 0, the idle task's: BearSSL's certificate check and key exchange
+  // run for a second or more without yielding, and above idle priority that
+  // starved core 0's idle task until the task watchdog reset the device. At
+  // the same priority they take turns; Wi-Fi's tasks still come first.
+  task = handle = xTaskCreateStaticPinnedToCore(taskMain, "discord", STACK_WORDS, nullptr, tskIDLE_PRIORITY, stack, &tcb, 0);
   return task != nullptr;
 }
 
