@@ -380,8 +380,10 @@ static int y_list_names(lua_State *L) {
       }
       size_t len = strlen(name) + (dir ? 1 : 0) + 1;
       if (used + len > cap) {
-        size_t c = cap ? cap * 2 : 2048;
-        while (c < used + len) c *= 2;
+        // grow 1 KB at a time: during MP3 playback the largest free block can
+        // be under 8 KB, so doubling would fail long before memory runs out
+        size_t c = cap + 1024;
+        while (c < used + len) c += 1024;
         char *nb = (char *)realloc(buf, c);
         if (!nb) break;
         buf = nb, cap = c;
