@@ -3,22 +3,28 @@
 // every request, so the screen never waits on the network; the app polls this
 // module each frame.
 //
-// Memory: one TLS connection needs ~45 KB (two 16 KB record buffers plus the
-// handshake). While a request runs, mbedTLS allocates from the Lua arena's
-// spare room first (see vm::arenaBorrow), then from the heap. Replies are
-// parsed as they stream in; only id/name/author/text are kept.
+// TLS is BearSSL (lib/bearssl), not the core's mbedTLS: mbedTLS wants two
+// 16.7 KB record buffers plus ~12 KB of scattered allocations per connection,
+// which never fit next to Wi-Fi and a Lua app. BearSSL shares one 16.7 KB
+// buffer for both directions (the block vm::open sets aside for `tls = true`
+// apps) and ~6 KB of state allocated once, and allocates nothing during a
+// connection. Replies are parsed as they stream in; only id/name/author/text
+// are kept.
 //
 // The bot token is read from data/discord.txt (put there from a PC) and never
-// passed to Lua. Certificates are checked against Google Trust Services roots.
+// passed to Lua. Certificates are checked against Google Trust Services roots
+// (src/discord_ta.h, from tools/gen_trust_anchors.py).
 #include <Arduino.h>
 #include <WiFi.h>
-#include <NetworkClientSecure.h>
 #include <esp_heap_caps.h>
-#include <mbedtls/platform.h>
+#include <esp_random.h>
+#include <time.h>
+#include "bearssl.h"
 #include <functional>
 #include <lua.hpp>
 #include <vector>
-#include "discord_ca.h"
+#include "discord_ta.h"
+#include "discord_tls.h"
 #include "musiclib.h"
 #include "storage.h"
 #include "usbdev.h"
@@ -26,30 +32,52 @@
 
 namespace {
 
-// ---------------------------------------------------------------- TLS memory
-volatile bool lend = false;  // borrow from the Lua arena (only during our requests)
+// ---------------------------------------------------------------- TLS state
+volatile bool busy = false;  // a request is running (Wi-Fi roaming waits)
 
-// Big blocks (the 16 KB record buffers) try the arena first and small ones the
-// heap first, so neither side's large free blocks get chipped away.
-void *tlsCalloc(size_t n, size_t size) {
-  size_t total = n * size;
-  if (size && total / size != n) return nullptr;
-  auto heap = [](size_t t) { return heap_caps_malloc(t, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); };
-  void *p;
-  if (!lend) p = heap(total);
-  else if (total >= 4096) {
-    p = vm::takeSlab(total);  // the block set aside when the app opened
-    if (!p) p = vm::arenaBorrow(total);
-    if (!p) p = heap(total);
+// BearSSL's contexts (~6 KB) live as long as the task; the I/O buffer is the
+// TLS block set aside when the app opened (else the arena, else the heap).
+struct Tls {
+  br_ssl_client_context sc;
+  br_x509_minimal_context xc;
+  br_x509_trust_anchor tas[DISCORDTRUSTANCHORS_COUNT];
+};
+Tls *tls = nullptr;
+unsigned char *iobuf = nullptr;
+
+void freeTls() {
+  if (iobuf && !vm::giveSlab(iobuf)) {
+    if (vm::inArena(iobuf)) vm::arenaReturn(iobuf);
+    else heap_caps_free(iobuf);
   }
-  else { p = heap(total); if (!p) p = vm::arenaBorrow(total); }
-  if (p) memset(p, 0, total);
-  return p;
+  iobuf = nullptr;
+  heap_caps_free(tls);
+  tls = nullptr;
 }
-void tlsFree(void *p) {
-  if (!p || vm::giveSlab(p)) return;
-  if (vm::inArena(p)) vm::arenaReturn(p);
-  else heap_caps_free(p);
+
+bool allocTls() {
+  if (!tls) tls = (Tls *)heap_caps_malloc(sizeof(Tls), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  if (!tls) tls = (Tls *)vm::arenaBorrow(sizeof(Tls));
+  if (!iobuf) iobuf = (unsigned char *)vm::takeSlab(BR_SSL_BUFSIZE_MONO);
+  if (!iobuf) iobuf = (unsigned char *)vm::arenaBorrow(BR_SSL_BUFSIZE_MONO);
+  if (!iobuf) iobuf = (unsigned char *)heap_caps_malloc(BR_SSL_BUFSIZE_MONO, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  return tls && iobuf;
+}
+
+int sockRead(void *ctx, unsigned char *buf, size_t len) {
+  WiFiClient *c = (WiFiClient *)ctx;
+  uint32_t t0 = millis();
+  while (millis() - t0 < 10000) {
+    int n = c->read(buf, len);
+    if (n > 0) return n;
+    if (!c->connected()) return -1;
+    delay(2);
+  }
+  return -1;
+}
+int sockWrite(void *ctx, const unsigned char *buf, size_t len) {
+  size_t n = ((WiFiClient *)ctx)->write(buf, len);
+  return n > 0 ? (int)n : -1;
 }
 
 // ---------------------------------------------------------------- JSON
@@ -185,44 +213,54 @@ bool loadToken() {
 }
 
 // ---------------------------------------------------------------- HTTP
-// One request; the body streams into json. Returns the HTTP status, or -1
-// when the connection failed. Retry-After (rate limits) goes to retryMs.
+// One request over TLS; the body streams into json. Returns the HTTP status,
+// or < 0 when the connection failed (see failure()). Retry-After (rate
+// limits) goes to retryMs.
 int request(const char *method, const String &path, const String &body, Json &json, uint32_t &retryMs) {
   if (WiFi.status() != WL_CONNECTED) return -2;
-  NetworkClientSecure c;
-  c.setCACert(DISCORD_CA);
-  c.setTimeout(10);
-  lend = true;
-  if (!c.connect("discord.com", 443)) {
-    char why[80] = "";
-    c.lastError(why, sizeof why);
-    lend = false;
-    usbdev::log(String("discord: TLS connect failed (") + why + "), heap free=" + heap_caps_get_free_size(MALLOC_CAP_8BIT) +
-                " largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + " arena free=" + vm::arenaFree() +
-                " largest=" + vm::arenaLargest());
+  time_t now = time(nullptr);
+  if (now < 1700000000) return -3;  // the clock isn't set yet (NTP), so certificates can't be checked
+  if (!allocTls()) {
+    usbdev::log(String("discord: no memory for TLS, heap largest=") + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) +
+                " arena largest=" + vm::arenaLargest());
+    return -1;
+  }
+  WiFiClient tcp;
+  if (!tcp.connect("discord.com", 443)) return -4;
+  busy = true;
+  discordTrustAnchors(tls->tas);
+  discordTlsInit(&tls->sc, &tls->xc, tls->tas, DISCORDTRUSTANCHORS_COUNT);
+  br_ssl_engine_set_buffer(&tls->sc.eng, iobuf, BR_SSL_BUFSIZE_MONO, 0);  // one buffer, both directions
+  uint8_t seed[32];
+  esp_fill_random(seed, sizeof seed);
+  br_ssl_engine_inject_entropy(&tls->sc.eng, seed, sizeof seed);
+  br_x509_minimal_set_time(&tls->xc, (uint32_t)(now / 86400 + 719528), (uint32_t)(now % 86400));
+  br_ssl_client_reset(&tls->sc, "discord.com", 0);
+  br_sslio_context io;
+  br_sslio_init(&io, &tls->sc.eng, sockRead, &tcp, sockWrite, &tcp);
+
+  String req = String(method) + " /api/v10" + path + " HTTP/1.0\r\nHost: discord.com\r\nAuthorization: Bot " + token +
+               "\r\nUser-Agent: DiscordBot (https://github.com/, 1) LiveOS\r\n";
+  if (body.length()) req += "Content-Type: application/json\r\nContent-Length: " + String(body.length()) + "\r\n";
+  req += "\r\n" + body;
+  if (br_sslio_write_all(&io, req.c_str(), req.length()) < 0 || br_sslio_flush(&io) < 0) {
+    usbdev::log(String("discord: TLS handshake failed, BearSSL error ") + br_ssl_engine_last_error(&tls->sc.eng));
+    tcp.stop();
+    busy = false;
     return -1;
   }
   static bool shown = false;  // the margin, once per boot
   if (!shown) {
     shown = true;
-    usbdev::log(String("discord: connected, heap free=") + heap_caps_get_free_size(MALLOC_CAP_8BIT) + " largest=" +
-                heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + " arena free=" + vm::arenaFree());
+    usbdev::log(String("discord: connected (BearSSL), heap free=") + heap_caps_get_free_size(MALLOC_CAP_8BIT) +
+                " largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + " arena free=" + vm::arenaFree());
   }
-  String req = String(method) + " /api/v10" + path + " HTTP/1.0\r\nHost: discord.com\r\nAuthorization: Bot " + token +
-               "\r\nUser-Agent: DiscordBot (https://github.com/, 1) LiveOS\r\n";
-  if (body.length()) req += "Content-Type: application/json\r\nContent-Length: " + String(body.length()) + "\r\n";
-  req += "\r\n";
-  c.print(req);
-  if (body.length()) c.print(body);
   int status = 0;
   bool headers = true;
   String line;
-  uint8_t buf[256];
-  uint32_t t0 = millis();
-  while ((c.connected() || c.available()) && millis() - t0 < 10000) {
-    int n = c.read(buf, sizeof buf);
-    if (n <= 0) { delay(5); continue; }
-    t0 = millis();
+  char buf[256];
+  int n;
+  while ((n = br_sslio_read(&io, buf, sizeof buf)) > 0) {
     for (int i = 0; i < n; i++) {
       char ch = buf[i];
       if (!headers) { json.feed(ch); continue; }
@@ -236,8 +274,8 @@ int request(const char *method, const String &path, const String &body, Json &js
       line = "";
     }
   }
-  c.stop();
-  lend = false;
+  tcp.stop();
+  busy = false;
   return status;
 }
 
@@ -252,7 +290,8 @@ String jsonEscape(const String &s) {
 }
 
 String failure(int code) {
-  return code == -2 ? "Wi-Fi is not connected" : code == -1 ? "Can't reach Discord (TLS or memory)"
+  return code == -2 ? "Wi-Fi is not connected" : code == -3 ? "Clock not set yet: wait for Wi-Fi time"
+       : code == -4 ? "Can't connect to discord.com" : code == -1 ? "Secure connection failed (see log)"
        : code == 401 ? "Bad token (check data/discord.txt)"
        : code == 403 ? "The bot can't read this channel" : code == 404 ? "Not found"
        : "Discord error " + String(code);
@@ -339,8 +378,6 @@ void send(const String &text) {
 }
 
 void taskMain(void *) {
-  static bool hooked = false;
-  if (!hooked) { mbedtls_platform_set_calloc_free(tlsCalloc, tlsFree); hooked = true; }
   while (!quit) {
     Cmd c;
     String arg, out;
@@ -364,6 +401,7 @@ void taskMain(void *) {
     else if (channel.length() && (int32_t)(millis() - nextPoll) >= 0) poll();
     else ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(200));
   }
+  freeTls();
   {
     Lock l;  // released before the task ends: a task that deletes itself never runs the unlock
     task = nullptr;
@@ -512,7 +550,7 @@ int l_stop(lua_State *L) {
 }  // namespace
 
 // True while a request runs: Wi-Fi roaming waits (its scans need heap too).
-bool discordBusy() { return lend; }
+bool discordBusy() { return busy; }
 
 extern const luaL_Reg discordFns[] = {{"ready", l_ready}, {"guilds", l_guilds}, {"channels", l_channels},
                                       {"list", l_list}, {"open", l_open}, {"send", l_send},

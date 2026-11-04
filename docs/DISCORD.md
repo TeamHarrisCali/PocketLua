@@ -38,8 +38,8 @@ app never does that.
 - **Text:** it is shown as plain ASCII, because the screen font has no accents or emoji. Accented
   letters lose their accents and emoji become `?`.
 - **Memory:** each request is an encrypted (HTTPS) connection to discord.com, checked against Google
-  Trust Services' root certificates. The connection briefly needs about 45 KB of RAM, which is lent
-  from the app memory area that the app isn't using. If the connection fails, the device log says
-  how much memory was free (`python3 tools/monitor.py`).
+  Trust Services' root certificates. It uses BearSSL, which needs one 16.7 KB buffer (set aside when the
+  app opens) and about 6 KB of fixed state. The connection needs the clock, so wait a moment after
+  Wi-Fi connects. If it fails, the device log says why (`python3 tools/monitor.py`).
 - **The token:** it stays on the SD card and in native code; apps never see it. If the card is lost,
   reset the token in the developer portal.
