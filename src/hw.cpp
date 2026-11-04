@@ -304,8 +304,20 @@ static const char *mp3Start() {
   return "";
 }
 
+// Stops recording or playback and waits for the task to finish (it closes
+// the file and frees its buffers). True once audio is idle.
+static bool audioStop() {
+  if (aMode == A_IDLE) return true;
+  aStop = true;
+  uint32_t t0 = millis();
+  while (aMode != A_IDLE && millis() - t0 < 3000) delay(5);
+  luaBudgetReset();
+  if (aMode != A_IDLE) usbdev::log("audio: task did not stop in 3 s");
+  return aMode == A_IDLE;
+}
+
 static int au_record(lua_State *L) {
-  if (aMode != A_IDLE) return luaL_error(L, "audio busy");
+  if (!audioStop()) { lua_pushboolean(L, 0); lua_pushstring(L, "audio busy"); return 2; }
   String real;
   fs::FS *fs = store::resolve(str(L, 1), real, true);
   aRate = (uint32_t)luaL_optinteger(L, 2, 16000);
@@ -331,7 +343,7 @@ static int au_record(lua_State *L) {
 
 // Plays an MP3 or 16-bit PCM WAV file. Returns true, or false + reason.
 static int au_play(lua_State *L) {
-  if (aMode != A_IDLE) return luaL_error(L, "audio busy");
+  if (!audioStop()) { lua_pushboolean(L, 0); lua_pushstring(L, "audio busy"); return 2; }
   String real;
   fs::FS *fs = store::resolve(str(L, 1), real);
   if (!fs || !(aFile = fs->open(real, "r"))) { lua_pushboolean(L, 0); lua_pushstring(L, "cannot open"); return 2; }
@@ -389,11 +401,7 @@ static int au_play(lua_State *L) {
 }
 
 static int au_stop(lua_State *L) {
-  if (aMode == A_IDLE) return 0;
-  aStop = true;
-  uint32_t t0 = millis();
-  while (aMode != A_IDLE && millis() - t0 < 1500) delay(5);
-  luaBudgetReset();
+  audioStop();
   return 0;
 }
 

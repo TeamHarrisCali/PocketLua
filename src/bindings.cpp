@@ -1,4 +1,7 @@
 #include <algorithm>
+#include <SD.h>
+#include <sys/stat.h>
+#include <dirent.h>
 #include "bindings.h"
 #include <vector>
 #include <M5Cardputer.h>
@@ -361,14 +364,19 @@ static int y_list_names(lua_State *L) {
   char *buf = nullptr;
   uint32_t *at = nullptr;
   size_t used = 0, cap = 0, n = 0, ncap = 0;
-  File d = fs ? fs->open(real) : File();
-  if (d && d.isDirectory()) {
-    for (File e = d.openNextFile(); e; e = d.openNextFile()) {
-      const char *name = e.name();
-      const char *slash = strrchr(name, '/');
-      if (slash) name = slash + 1;
-      bool dir = e.isDirectory();
-      e.close();
+  uint32_t t0 = millis();
+  // readdir() gives each name and type in one pass; File::openNextFile()
+  // opened every entry (an SD round trip each), which made big folders slow.
+  String full = String(fs == &SD ? "/sd" : "/littlefs") + real;
+  DIR *d = fs ? opendir(full.c_str()) : nullptr;
+  if (d) {
+    for (struct dirent *e = readdir(d); e; e = readdir(d)) {
+      const char *name = e->d_name;
+      bool dir = e->d_type == DT_DIR;
+      if (e->d_type == DT_UNKNOWN) {
+        struct stat st;
+        dir = stat((full + "/" + name).c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+      }
       if (name[0] == '.') continue;
       if (!dir && exts != ",,") {
         const char *dot = strrchr(name, '.');
@@ -400,7 +408,7 @@ static int y_list_names(lua_State *L) {
       used += len;
       if (n >= 2000) break;
     }
-    d.close();
+    closedir(d);
   }
   std::sort(at, at + n, [buf](uint32_t a, uint32_t b) {
     const char *x = buf + a, *y = buf + b;
@@ -416,6 +424,7 @@ static int y_list_names(lua_State *L) {
   }
   free(buf);
   free(at);
+  usbdev::log(String("list_names ") + real + ": " + n + " in " + (millis() - t0) + " ms");
   return 1;
 }
 
