@@ -202,6 +202,12 @@ int request(const char *method, const String &path, const String &body, Json &js
                 " largest=" + vm::arenaLargest());
     return -1;
   }
+  static bool shown = false;  // the margin, once per boot
+  if (!shown) {
+    shown = true;
+    usbdev::log(String("discord: connected, heap free=") + heap_caps_get_free_size(MALLOC_CAP_8BIT) + " largest=" +
+                heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + " arena free=" + vm::arenaFree());
+  }
   String req = String(method) + " /api/v10" + path + " HTTP/1.0\r\nHost: discord.com\r\nAuthorization: Bot " + token +
                "\r\nUser-Agent: DiscordBot (https://github.com/, 1) LiveOS\r\n";
   if (body.length()) req += "Content-Type: application/json\r\nContent-Length: " + String(body.length()) + "\r\n";
@@ -363,8 +369,7 @@ void taskMain(void *) {
   vTaskDelete(nullptr);
 }
 
-// The task's stack (the TLS handshake runs on it) comes from the Lua arena
-// too: the heap's large blocks are needed for the record buffers.
+// The task's stack (the TLS handshake runs on it), from the heap or the arena.
 const size_t STACK_WORDS = 8192 / sizeof(StackType_t);
 StackType_t *stack = nullptr;
 StaticTask_t tcb;
@@ -373,7 +378,8 @@ TaskHandle_t handle = nullptr;  // stays set until the stack can be returned
 void releaseStack() {
   if (!stack) return;
   if (handle && eTaskGetState(handle) != eDeleted) return;  // still running
-  vm::arenaReturn(stack);
+  if (vm::inArena(stack)) vm::arenaReturn(stack);
+  else heap_caps_free(stack);
   stack = nullptr;
   handle = nullptr;
 }
@@ -382,8 +388,17 @@ bool ensureTask() {
   if (!mu) mu = xSemaphoreCreateMutex();
   if (task) return true;
   releaseStack();
-  if (!stack) stack = (StackType_t *)vm::arenaBorrow(STACK_WORDS * sizeof(StackType_t));
-  if (!stack) return false;
+  // The heap first: the arena is short once the app's TLS block is set aside
+  // (vm::open), and the heap's largest block (~28 KB) holds this and the
+  // other 16.7 KB record buffer.
+  size_t bytes = STACK_WORDS * sizeof(StackType_t);
+  if (!stack) stack = (StackType_t *)heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  if (!stack) stack = (StackType_t *)vm::arenaBorrow(bytes);
+  if (!stack) {
+    usbdev::log(String("discord: no memory for the task stack, heap largest=") +
+                heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + " arena largest=" + vm::arenaLargest());
+    return false;
+  }
   quit = false;
   task = handle = xTaskCreateStaticPinnedToCore(taskMain, "discord", STACK_WORDS, nullptr, 1, stack, &tcb, 0);
   return task != nullptr;
