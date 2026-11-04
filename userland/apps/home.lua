@@ -13,8 +13,11 @@ local COLS, ROWS = 4, 2
 local PER = COLS * ROWS
 local CELL_W, CELL_H, GY = 60, 44, 34
 
-local all = {}       -- every app's metadata
-local shown = {}     -- what the grid shows now
+-- App metadata as parallel arrays (one entry per app): far less RAM than a
+-- table per app. `shown` holds indexes into them; NEW marks the "New app" tile.
+local NAME, TITLE, ICON, COLOR, CAT, ORDER = {}, {}, {}, {}, {}, {}
+local NEW = 0
+local shown = {}
 local cat, sel, query = 1, 1, ""
 
 local TEMPLATE = [[
@@ -51,50 +54,42 @@ end
 -- Titles, icons and categories come from each app's `local app = { ... }`
 -- line, read as text: running every app to draw the grid would need all of
 -- them in memory at once.
-local function read_meta(name)
+local function add_app(name)
   local head = sys.read_text("apps/" .. name .. ".lua", 1024)
-  local t = head and head:match("local%s+app%s*=%s*(%b{})")
-  local meta = { name = name, title = name, icon = "app", order = 100, category = "tools" }
-  if t then
-    meta.title = t:match('title%s*=%s*"([^"]*)"') or name
-    meta.icon = t:match('icon%s*=%s*"([%w_]+)"') or "app"
-    meta.color = t:match('color%s*=%s*"([%w_]+)"')
-    meta.order = tonumber(t:match("order%s*=%s*(%d+)")) or 100
-    meta.category = t:match('category%s*=%s*"(%w+)"') or "tools"
-    meta.hidden = t:match("hidden%s*=%s*true") ~= nil
-  end
-  meta.color = resolve_color(meta.color, name)
-  return meta
+  local t = head and head:match("local%s+app%s*=%s*(%b{})") or ""
+  if t:match("hidden%s*=%s*true") then return end
+  local i = #NAME + 1
+  NAME[i] = name
+  TITLE[i] = t:match('title%s*=%s*"([^"]*)"') or name
+  ICON[i] = t:match('icon%s*=%s*"([%w_]+)"') or "app"
+  COLOR[i] = resolve_color(t:match('color%s*=%s*"([%w_]+)"'), name)
+  CAT[i] = t:match('category%s*=%s*"(%w+)"') or "tools"
+  ORDER[i] = tonumber(t:match("order%s*=%s*(%d+)")) or 100
 end
 
 local function filter()
   shown = {}
   local q = query:lower()
-  for _, a in ipairs(all) do
+  for i = 1, #NAME do
     local hit
-    if q ~= "" then hit = a.title:lower():find(q, 1, true) ~= nil
-    else hit = CATS[cat] == "all" or a.category == CATS[cat] end
-    if hit then shown[#shown + 1] = a end
+    if q ~= "" then hit = TITLE[i]:lower():find(q, 1, true) ~= nil
+    else hit = CATS[cat] == "all" or CAT[i] == CATS[cat] end
+    if hit then shown[#shown + 1] = i end
   end
-  if q == "" and (CATS[cat] == "all" or CATS[cat] == "tools") then
-    shown[#shown + 1] = { new = true, title = "New app", icon = "plus", color = col.surface2 }
-  end
+  table.sort(shown, function(a, b)
+    if ORDER[a] ~= ORDER[b] then return ORDER[a] < ORDER[b] end
+    return TITLE[a]:lower() < TITLE[b]:lower()
+  end)
+  if q == "" and (CATS[cat] == "all" or CATS[cat] == "tools") then shown[#shown + 1] = NEW end
   sel = math.max(1, math.min(sel, #shown))
 end
 
 local function scan()
-  all = {}
+  NAME, TITLE, ICON, COLOR, CAT, ORDER = {}, {}, {}, {}, {}, {}
   for _, e in ipairs(sys.list("apps")) do
     local name = e.name:match("^(.+)%.lua$")
-    if name then
-      local meta = read_meta(name)
-      if not meta.hidden then all[#all + 1] = meta end
-    end
+    if name then add_app(name) end
   end
-  table.sort(all, function(a, b)
-    if a.order ~= b.order then return a.order < b.order end
-    return a.title:lower() < b.title:lower()
-  end)
 end
 
 function app.init(args, saved)
@@ -137,12 +132,14 @@ function app.draw()
   for i = 1, PER do
     local a = shown[first + i]
     if not a then break end
+    local title = a == NEW and "New app" or TITLE[a]
     local c, r = (i - 1) % COLS, (i - 1) // COLS
     local cx, cy = c * CELL_W, GY + r * CELL_H
     local on = (first + i) == sel
     if on then ui.card(cx + 3, cy - 2, CELL_W - 6, CELL_H - 1, true) end
-    ui.tile(cx + 15, cy + 1, 30, a.icon, a.color)
-    local label = ui.fit(a.title, CELL_W - 6)
+    if a == NEW then ui.tile(cx + 15, cy + 1, 30, "plus", col.surface2)
+    else ui.tile(cx + 15, cy + 1, 30, ICON[a], COLOR[a]) end
+    local label = ui.fit(title, CELL_W - 6)
     ui.text(cx + math.floor((CELL_W - #label * 6) / 2), cy + 33, label, on and col.text or col.muted)
   end
   if #shown == 0 then ui.center(70, "No apps match", col.muted) end
@@ -157,7 +154,8 @@ function app.key(k)
   local d = ui.nav(k)
   if k.ctrl and k.text then
     local c = k.text:lower()
-    if c == "e" and shown[sel] and not shown[sel].new then shell.edit("apps/" .. shown[sel].name .. ".lua")
+    local a = shown[sel]
+    if c == "e" and a and a ~= NEW then shell.edit("apps/" .. NAME[a] .. ".lua")
     elseif c == "n" then new_app()
     else return false end
     return true
@@ -173,7 +171,7 @@ function app.key(k)
   elseif k.key == "enter" then
     local a = shown[sel]
     if not a then return true end
-    if a.new then new_app() else shell.launch(a.name) end
+    if a == NEW then new_app() else shell.launch(NAME[a]) end
   elseif k.key == "left" or (d == "left" and query == "") then sel = math.max(1, sel - 1)
   elseif k.key == "right" or (d == "right" and query == "") then sel = math.min(#shown, sel + 1)
   elseif k.key == "up" or (d == "up" and query == "") then sel = math.max(1, sel - COLS)

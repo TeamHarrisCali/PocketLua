@@ -234,7 +234,7 @@ end
 function ui.icon(name, x, y, fg, bg)
   local ok, icons = pcall(require, "icons")
   if not ok then return end  -- e.g. out of memory: skip the picture, keep the screen
-  (icons[name] or icons.app)(x, y, fg or col.white, bg)
+  icons.draw(name, x, y, fg or col.white, bg)
 end
 
 -- A rounded app tile with its icon, `size` pixels square, top-left at (x, y).

@@ -12,7 +12,7 @@ _G.shell = shell
 
 local DEFAULT_TZ = "PST8PDT,M3.2.0,M11.1.0"
 local MIN_FREE_TO_OPEN = 24 * 1024  -- refuse to open an app below this much free RAM
-local MIN_FREE_FOR_WIFI = 100 * 1024 -- Wi-Fi takes ~60 KB; Lua needs ~40 KB left after it
+local MIN_FREE_FOR_WIFI = 90 * 1024 -- Wi-Fi takes ~60 KB; Lua needs ~30 KB left after it
 
 local current, current_name = nil, nil
 local modal = nil

@@ -10,6 +10,7 @@
 #include "storage.h"
 #include "usbdev.h"
 #include "hw.h"
+#include "luapool.h"
 #include <Preferences.h>
 
 // A third-of-the-screen frame buffer (22 KB instead of 65 KB): each frame is
@@ -39,10 +40,17 @@ static int failStreak = 0;
 size_t luaMemUsed() { return memUsed; }
 
 // ---------------------------------------------------------------- Lua VM
+static void releaseBlock(void *p, size_t size) {
+  if (size <= luapool::MAX_SMALL) luapool::release(p, size);
+  else free(p);
+}
+
+// Lua passes the old block size with every free/realloc, so small blocks are
+// routed to the pool (see luapool.h) and larger ones to the normal heap.
 static void *luaAlloc(void *, void *ptr, size_t osize, size_t nsize) {
   if (ptr == nullptr) osize = 0;
   if (nsize == 0) {
-    if (ptr) { memUsed -= osize; free(ptr); }
+    if (ptr) { memUsed -= osize; releaseBlock(ptr, osize); }
     return nullptr;
   }
   if (nsize > osize) {
@@ -50,7 +58,22 @@ static void *luaAlloc(void *, void *ptr, size_t osize, size_t nsize) {
     if (memUsed + grow > MEM_LIMIT) return nullptr;
     if (heap_caps_get_free_size(MALLOC_CAP_8BIT) < grow + HEAP_RESERVE) return nullptr;
   }
-  void *p = realloc(ptr, nsize);
+  bool oldSmall = ptr && osize <= luapool::MAX_SMALL;
+  bool newSmall = nsize <= luapool::MAX_SMALL;
+  void *p;
+  if (!ptr) {
+    p = newSmall ? luapool::alloc(nsize) : malloc(nsize);
+  } else if (oldSmall && newSmall && luapool::sameClass(osize, nsize)) {
+    p = ptr;
+  } else if (!oldSmall && !newSmall) {
+    p = realloc(ptr, nsize);
+  } else {
+    p = newSmall ? luapool::alloc(nsize) : malloc(nsize);
+    if (p) {
+      memcpy(p, ptr, osize < nsize ? osize : nsize);
+      releaseBlock(ptr, osize);
+    }
+  }
   if (p) memUsed = memUsed - osize + nsize;
   return p;
 }
@@ -92,7 +115,8 @@ static bool callGlobal(const char *name, const std::function<int(lua_State *)> &
 
 static void logHeap(const char *tag) {
   usbdev::log(String("heap ") + tag + ": free=" + ESP.getFreeHeap() + " largest=" +
-              heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + " lua=" + memUsed);
+              heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + " lua=" + memUsed +
+              " pool=" + luapool::pageBytes());
 }
 
 static bool bootLua(bool safe) {
