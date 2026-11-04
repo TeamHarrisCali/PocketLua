@@ -1,5 +1,8 @@
 // BearSSL client set up for discord.com only: TLS 1.2, ECDHE with AES-GCM or
-// ChaCha20-Poly1305, ECDSA or RSA certificates. Linking just this (instead of
+// ChaCha20-Poly1305, RSA certificates. Only RSA suites are offered: Discord
+// then sends its RSA chain (to GTS Root R1), whose signatures are far cheaper
+// to check than the P-384 ECDSA one in its other chain (PC: 4.6 vs 13 ms of
+// CPU; on the device that was the difference between ~5 and ~15 s). Linking just this (instead of
 // br_ssl_client_init_full, which pulls in every suite, TLS 1.0, DES, ...)
 // keeps the firmware smaller. Shared with the PC test of the connection.
 #pragma once
@@ -7,10 +10,9 @@
 
 static void discordTlsInit(br_ssl_client_context *cc, br_x509_minimal_context *xc,
                            const br_x509_trust_anchor *tas, size_t ntas) {
-  static const uint16_t suites[] = {
-      BR_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,       BR_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-      BR_TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256, BR_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
-      BR_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,       BR_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384};
+  static const uint16_t suites[] = {BR_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+                                    BR_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+                                    BR_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384};
   br_ssl_client_zero(cc);
   br_ssl_engine_set_versions(&cc->eng, BR_TLS12, BR_TLS12);
   br_ssl_engine_set_suites(&cc->eng, suites, sizeof suites / sizeof *suites);

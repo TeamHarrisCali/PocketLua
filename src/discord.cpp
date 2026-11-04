@@ -247,24 +247,116 @@ bool loadToken() {
 }
 
 // ---------------------------------------------------------------- HTTP
-// One request over TLS; the body streams into json. Returns the HTTP status,
-// or < 0 when the connection failed (see failure()). Retry-After (rate
-// limits) goes to retryMs.
-int request(const char *method, const String &path, const String &body, Json &json, uint32_t &retryMs) {
-  if (WiFi.status() != WL_CONNECTED) return -2;
-  time_t now = time(nullptr);
-  if (now < 1700000000) return -3;  // the clock isn't set yet (NTP), so certificates can't be checked
+// One TLS connection is kept open and reused for every request (HTTP/1.1
+// keep-alive): on the device the handshake's math takes seconds, so it runs
+// once per session rather than once per poll.
+WiFiClient tcp;
+br_sslio_context sio;
+bool up = false;  // a TLS connection is open
+
+void closeConn() {
+  if (up) tcp.stop();
+  up = false;
+}
+
+// A fresh connection (the handshake itself runs during the first write).
+int openConn() {
+  closeConn();
   if (!allocTls()) {
     usbdev::log(String("discord: no memory for TLS, heap largest=") + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) +
                 " arena largest=" + vm::arenaLargest());
     return -1;
   }
-  WiFiClient tcp;
   if (!tcp.connect("discord.com", 443)) return -4;
+  discordTrustAnchors(tls->tas);
+  discordTlsInit(&tls->sc, &tls->xc, tls->tas, DISCORDTRUSTANCHORS_COUNT);
+  br_ssl_engine_set_buffer(&tls->sc.eng, iobuf, BR_SSL_BUFSIZE_MONO, 0);  // one buffer, both directions
+  uint8_t seed[32];
+  esp_fill_random(seed, sizeof seed);
+  br_ssl_engine_inject_entropy(&tls->sc.eng, seed, sizeof seed);
+  time_t now = time(nullptr);
+  br_x509_minimal_set_time(&tls->xc, (uint32_t)(now / 86400 + 719528), (uint32_t)(now % 86400));
+  br_ssl_client_reset(&tls->sc, "discord.com", 0);
+  br_sslio_init(&sio, &tls->sc.eng, sockRead, &tcp, sockWrite, &tcp);
+  up = true;
+  return 0;
+}
+
+// Reads one HTTP response: status, headers (Content-Length, chunked,
+// Connection: close, Retry-After), and exactly its body, which streams into
+// json. Returns the status, or -1 if the connection broke before any of it.
+int readResponse(Json &json, uint32_t &retryMs, bool &keep) {
+  int status = 0;
+  long length = -1;  // -1: until the connection closes
+  bool chunked = false, headers = true, gotAny = false, lastChunk = false;
+  long chunkLeft = 0;  // chunked: bytes left in this chunk; -1 reading a size line
+  int crlf = 0;        // chunked: line ends still to skip after a chunk
+  String line;
+  char buf[256];
+  keep = true;
+  while (true) {
+    if (!headers && !chunked && length == 0) break;
+    int n = br_sslio_read(&sio, buf, sizeof buf);
+    if (n <= 0) {
+      if (!gotAny) return -1;
+      keep = false;
+      break;
+    }
+    gotAny = true;
+    for (int i = 0; i < n; i++) {
+      char ch = buf[i];
+      if (headers) {
+        if (ch == '\r') continue;
+        if (ch != '\n') { if (line.length() < 200) line += ch; continue; }
+        String low = line;
+        low.toLowerCase();
+        if (!status && low.startsWith("http/")) status = line.substring(9, 12).toInt();
+        else if (low.startsWith("content-length:")) length = low.substring(15).toInt();
+        else if (low.startsWith("transfer-encoding:") && low.indexOf("chunked") > 0) chunked = true;
+        else if (low.startsWith("connection:") && low.indexOf("close") > 0) keep = false;
+        else if (low.startsWith("retry-after:")) retryMs = (uint32_t)(low.substring(12).toFloat() * 1000) + 200;
+        if (!line.length()) {
+          headers = false;
+          chunkLeft = -1;
+        }
+        line = "";
+        continue;
+      }
+      if (!chunked) {
+        if (length > 0) { json.feed(ch); length--; }
+        else if (length < 0) json.feed(ch);
+        continue;
+      }
+      // chunked body: "<hex size>\r\n<data>\r\n" ... "0\r\n\r\n"
+      if (crlf) {
+        if (--crlf == 0 && lastChunk) { length = 0; chunked = false; }  // the whole body is in
+        continue;
+      }
+      if (chunkLeft > 0) {
+        json.feed(ch);
+        if (--chunkLeft == 0) crlf = 2;
+        continue;
+      }
+      if (ch == '\r') continue;
+      if (ch != '\n') { if (line.length() < 16) line += ch; continue; }
+      chunkLeft = strtol(line.c_str(), nullptr, 16);
+      line = "";
+      if (chunkLeft == 0) { crlf = 2; lastChunk = true; }  // last chunk: its blank line ends the body
+    }
+  }
+  return status;
+}
+
+// One request; the body streams into json. Returns the HTTP status, or < 0
+// when the connection failed (see failure()). Retry-After (rate limits) goes
+// to retryMs. A connection the server has closed is reopened once.
+int request(const char *method, const String &path, const String &body, Json &json, uint32_t &retryMs) {
+  if (WiFi.status() != WL_CONNECTED) return -2;
+  if (time(nullptr) < 1700000000) return -3;  // the clock isn't set yet (NTP), so certificates can't be checked
   busy = true;
   // Full speed for the request: normal priority, with the task watchdog not
   // checking core 0's idle task meanwhile (BearSSL's math doesn't yield; the
-  // watchdog panics after 5 s). Restored after; every wait below has a 10 s
+  // watchdog panics after 5 s). Restored after; every wait has a 10 s
   // timeout, so a stuck request still ends.
   esp_task_wdt_config_t off = {5000, 0, true}, on = {5000, 1u << 0, true};  // sdkconfig: 5 s, CPU0 idle, panic
   esp_task_wdt_reconfigure(&off);
@@ -274,73 +366,56 @@ int request(const char *method, const String &path, const String &body, Json &js
     ~Restore() {
       vTaskPrioritySet(nullptr, tskIDLE_PRIORITY);
       esp_task_wdt_reconfigure(&cfg);
+      busy = false;
     }
   } restore{on};
-  discordTrustAnchors(tls->tas);
-  discordTlsInit(&tls->sc, &tls->xc, tls->tas, DISCORDTRUSTANCHORS_COUNT);
-  br_ssl_engine_set_buffer(&tls->sc.eng, iobuf, BR_SSL_BUFSIZE_MONO, 0);  // one buffer, both directions
-  uint8_t seed[32];
-  esp_fill_random(seed, sizeof seed);
-  br_ssl_engine_inject_entropy(&tls->sc.eng, seed, sizeof seed);
-  br_x509_minimal_set_time(&tls->xc, (uint32_t)(now / 86400 + 719528), (uint32_t)(now % 86400));
-  br_ssl_client_reset(&tls->sc, "discord.com", 0);
-  br_sslio_context io;
-  br_sslio_init(&io, &tls->sc.eng, sockRead, &tcp, sockWrite, &tcp);
 
-  String req = String(method) + " /api/v10" + path + " HTTP/1.0\r\nHost: discord.com\r\nAuthorization: Bot " + token +
-               "\r\nUser-Agent: DiscordBot (https://github.com/, 1) LiveOS\r\n";
+  String req = String(method) + " /api/v10" + path + " HTTP/1.1\r\nHost: discord.com\r\nAuthorization: Bot " + token +
+               "\r\nUser-Agent: DiscordBot (https://github.com/, 1) LiveOS\r\nConnection: keep-alive\r\n";
   if (body.length()) req += "Content-Type: application/json\r\nContent-Length: " + String(body.length()) + "\r\n";
   req += "\r\n" + body;
-  uint32_t t0 = millis();
-  ioError = "";
-  ioStats = IoStats();
-  // where the time went: waiting on the network vs BearSSL computing
-  auto timing = [&]() {
-    uint32_t total = millis() - t0;
-    return String(" [") + total + " ms: wrote " + ioStats.writeBytes + " B in " + ioStats.writes + " (" + ioStats.writeMs + " ms), read " +
-           ioStats.readBytes + " B in " + ioStats.reads + " (" + ioStats.readMs + " ms), compute ~" +
-           (total - ioStats.readMs - ioStats.writeMs) + " ms, longest compute " + ioStats.longestGap + " ms, cpu " +
-           getCpuFrequencyMhz() + " MHz]";
-  };
-  if (br_sslio_write_all(&io, req.c_str(), req.length()) < 0 || br_sslio_flush(&io) < 0) {
-    usbdev::log(String("discord: TLS handshake failed, BearSSL error ") + br_ssl_engine_last_error(&tls->sc.eng) +
-                (ioError.length() ? " (" + ioError + ")" : String("")) + timing() + " stack left=" +
-                uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t) +
-                " heap free=" + heap_caps_get_free_size(MALLOC_CAP_8BIT) + " largest=" +
-                heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-    tcp.stop();
-    busy = false;
-    return -1;
-  }
-  static bool shown = false;  // the margin, once per boot
-  if (!shown) {
-    shown = true;
-    usbdev::log(String("discord: connected (BearSSL)") + timing() + " stack left=" +
-                uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t) + " heap free=" + heap_caps_get_free_size(MALLOC_CAP_8BIT) +
-                " largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + " arena free=" + vm::arenaFree());
-  }
-  int status = 0;
-  bool headers = true;
-  String line;
-  char buf[256];
-  int n;
-  while ((n = br_sslio_read(&io, buf, sizeof buf)) > 0) {
-    for (int i = 0; i < n; i++) {
-      char ch = buf[i];
-      if (!headers) { json.feed(ch); continue; }
-      if (ch == '\r') continue;
-      if (ch != '\n') { if (line.length() < 200) line += ch; continue; }
-      if (!status && line.startsWith("HTTP/")) status = line.substring(9, 12).toInt();
-      String low = line;
-      low.toLowerCase();
-      if (low.startsWith("retry-after:")) retryMs = (uint32_t)(low.substring(12).toFloat() * 1000) + 200;
-      if (!line.length()) headers = false;
-      line = "";
+  for (int attempt = 0; attempt < 2; attempt++) {
+    bool fresh = !up || !tcp.connected();
+    if (fresh) {
+      int e = openConn();
+      if (e < 0) return e;
     }
+    uint32_t t0 = millis();
+    ioError = "";
+    ioStats = IoStats();
+    // where the time went: waiting on the network vs BearSSL computing
+    auto timing = [&]() {
+      uint32_t total = millis() - t0;
+      return String(" [") + total + " ms: wrote " + ioStats.writeBytes + " B in " + ioStats.writes + " (" + ioStats.writeMs +
+             " ms), read " + ioStats.readBytes + " B in " + ioStats.reads + " (" + ioStats.readMs + " ms), longest compute " +
+             ioStats.longestGap + " ms]";
+    };
+    if (br_sslio_write_all(&sio, req.c_str(), req.length()) < 0 || br_sslio_flush(&sio) < 0) {
+      int err = br_ssl_engine_last_error(&tls->sc.eng);
+      closeConn();
+      if (!fresh) continue;  // the server closed an idle connection: open a new one
+      usbdev::log(String("discord: TLS handshake failed, BearSSL error ") + err +
+                  (ioError.length() ? " (" + ioError + ")" : String("")) + timing() + " stack left=" +
+                  uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t) + " heap free=" +
+                  heap_caps_get_free_size(MALLOC_CAP_8BIT) + " largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+      return -1;
+    }
+    bool keep;
+    int status = readResponse(json, retryMs, keep);
+    if (fresh) {
+      usbdev::log(String("discord: connected (BearSSL)") + timing() + " stack left=" +
+                  uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t) + " heap free=" +
+                  heap_caps_get_free_size(MALLOC_CAP_8BIT) + " largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    }
+    if (status < 0) {
+      closeConn();
+      if (!fresh) continue;
+      return -1;
+    }
+    if (!keep) closeConn();
+    return status;
   }
-  tcp.stop();
-  busy = false;
-  return status;
+  return -1;
 }
 
 String jsonEscape(const String &s) {
@@ -465,6 +540,7 @@ void taskMain(void *) {
     else if (channel.length() && (int32_t)(millis() - nextPoll) >= 0) poll();
     else ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(200));
   }
+  closeConn();
   freeTls();
   {
     Lock l;  // released before the task ends: a task that deletes itself never runs the unlock
