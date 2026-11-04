@@ -188,14 +188,21 @@ void toggle(int x, int y, bool on) {
   disc(on ? x + 17 : x + 5, y + 5, 3, on ? col.on_accent : col.muted);
 }
 
-int list(const std::vector<Row> &rows, int sel, int top, int x, int y, int w, int rowh, int n) {
+static int listTop(int sel, int top, int n) {
   if (sel < top) top = sel;
   else if (sel > top + n - 1) top = sel - n + 1;
-  if (top < 1) top = 1;
+  return top < 1 ? 1 : top;
+}
+
+// Draws rows top..top+n-1 of `total`; row(i) gives row i (1-based), so only
+// the visible rows need to exist.
+template <class F>
+static int listDraw(F row, int total, int sel, int top, int x, int y, int w, int rowh, int n) {
+  top = listTop(sel, top, n);
   for (int i = 0; i < n; i++) {
     int idx = top + i;
-    if (idx > (int)rows.size()) break;
-    const Row &r = rows[idx - 1];
+    if (idx > total) break;
+    const Row &r = row(idx);
     int ry = y + i * rowh;
     if (!visible(ry, rowh)) continue;
     bool on = idx == sel;
@@ -219,13 +226,16 @@ int list(const std::vector<Row> &rows, int sel, int top, int x, int y, int w, in
     }
     text(tx, ty, fit(r.label, w - (tx - x) - rw - 2).c_str(), r.dim ? col.muted : col.text);
   }
-  if ((int)rows.size() > n) {
-    int total = rows.size();
+  if (total > n) {
     int bh = max(6, n * rowh * n / total);
     int by = y + (n * rowh - bh) * (top - 1) / max(1, total - n);
     fill(x + w + 1, by, 2, bh, col.line);
   }
   return top;
+}
+
+int list(const std::vector<Row> &rows, int sel, int top, int x, int y, int w, int rowh, int n) {
+  return listDraw([&](int i) -> const Row & { return rows[i - 1]; }, rows.size(), sel, top, x, y, w, rowh, n);
 }
 
 int tabs(const char *const *labels, int n, int active, int y) {
@@ -389,15 +399,21 @@ static int l_nav(lua_State *L) {
   return 1;
 }
 
+// Rows are tables ({label, value, badge, badge_color, dim, switch}) or plain
+// strings. Only the visible rows are copied out of Lua, so long lists (a music
+// library) cost nothing extra per frame.
 static int l_list(lua_State *L) {
   luaL_checktype(L, 1, LUA_TTABLE);
-  std::vector<Row> rows;
-  int n = lua_rawlen(L, 1);
-  rows.reserve(n);
-  for (int i = 1; i <= n; i++) {
-    lua_rawgeti(L, 1, i);
-    Row r;
-    if (lua_istable(L, -1)) {
+  int total = lua_rawlen(L, 1), sel = I(L, 2), n = I(L, 8);
+  if (n < 1 || n > 16) n = n < 1 ? 1 : 16;
+  int top = listTop(sel, I(L, 3), n);
+  Row win[16];
+  for (int i = 0; i < n && top + i <= total; i++) {
+    Row &r = win[i];
+    lua_rawgeti(L, 1, top + i);
+    if (lua_type(L, -1) == LUA_TSTRING) {
+      r.label = lua_tostring(L, -1);
+    } else if (lua_istable(L, -1)) {
       lua_getfield(L, -1, "label"); r.label = lua_isnil(L, -1) ? "" : luaL_tolstring(L, -1, nullptr); lua_pop(L, lua_isnil(L, -1) ? 1 : 2);
       lua_getfield(L, -1, "value");
       if (!lua_isnil(L, -1)) { r.value = luaL_tolstring(L, -1, nullptr); lua_pop(L, 1); }
@@ -408,9 +424,9 @@ static int l_list(lua_State *L) {
       lua_getfield(L, -1, "switch"); if (!lua_isnil(L, -1)) r.sw = lua_toboolean(L, -1) ? 1 : 0; lua_pop(L, 1);
     }
     lua_pop(L, 1);
-    rows.push_back(r);
   }
-  lua_pushinteger(L, list(rows, I(L, 2), I(L, 3), I(L, 4), I(L, 5), I(L, 6), I(L, 7), I(L, 8)));
+  lua_pushinteger(L, listDraw([&](int i) -> const Row & { return win[i - top]; }, total, sel, top, I(L, 4), I(L, 5),
+                              I(L, 6), I(L, 7), n));
   return 1;
 }
 

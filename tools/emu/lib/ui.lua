@@ -270,6 +270,7 @@ function ui.list(rows, sel, top, x, y, w, rowh, nrows)
   for i = 0, nrows - 1 do
     local r = rows[top + i]
     if not r then break end
+    if type(r) == "string" then r = { label = r } end  -- plain-string rows, as in uikit.cpp
     local ry = y + i * rowh
     if not visible(ry, rowh) then goto continue end
     local on = (top + i) == sel

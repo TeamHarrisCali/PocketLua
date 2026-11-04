@@ -181,6 +181,16 @@ A.state = "idle"; frames(40)
 check(last("play")[2] == "data/music/Artist/Album/02 Second.mp3", "music: the album plays on in order")
 key("esc"); key("esc")
 check(shell.app() == "music" and has(screen(), "a_song"), "music: Esc goes up to the top folder")
+key("b"); key("enter")
+check(last("play")[2] == "data/music/b_song.wav", "music: a letter jumps to the first name starting with it")
+key("enter")
+for i = 1, 300 do sys.write_text(string.format("data/music/Band %03d/x.mp3", i), "ID3") end
+key("esc"); shell.launch("music"); frames(3)
+alive("music", "lists 300 artists")
+key("z"); key("b"); frames(2)
+alive("music", "letter jump in a long list")
+for i = 1, 300 do sys.remove(string.format("data/music/Band %03d/x.mp3", i)) end
+key("esc"); shell.launch("music"); frames(2)
 local v0 = tonumber(cfg.get("vol")) or 100
 key("=")
 check(tonumber(cfg.get("vol")) > v0 and last("volume")[2] == tonumber(cfg.get("vol")), "music: = raises the volume")

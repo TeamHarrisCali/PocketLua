@@ -98,6 +98,21 @@ sys = {
     end
     return out
   end,
+  list_names = function(dir, exts)
+    local dirs, files, want = {}, {}, nil
+    if exts and exts ~= "" then
+      want = {}
+      for e in exts:lower():gmatch("[^,]+") do want[e] = true end
+    end
+    for _, e in ipairs(sys.list(dir)) do
+      if e.dir then dirs[#dirs + 1] = e.name .. "/"
+      elseif not want or want[(e.name:match("%.([^.]+)$") or ""):lower()] then files[#files + 1] = e.name end
+    end
+    local function by(a, b) return a:lower() < b:lower() end
+    table.sort(dirs, by); table.sort(files, by)
+    for _, f in ipairs(files) do dirs[#dirs + 1] = f end
+    return dirs
+  end,
 }
 wifi = { enable = function() return true end, connect = function() end, disconnect = function() end,
   status = function() return "connected" end, scan_start = function() end, rssi = function() return -50 end,

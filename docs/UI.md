@@ -35,7 +35,7 @@ The old names (`panel`, `panel2`, `dim`, `bar`) still work, but use the tokens a
 | Function | Use for |
 |---|---|
 | `ui.footer({ {"Enter","Open"}, {"Esc","Back"} })` | Key hints, drawn as keycaps. Every screen has one; at most 4 hints; the most important first |
-| `ui.list(rows, sel, top, x, y, w, rowh, n)` | Any vertical choice. The selected row is raised with an accent bar. Rows can carry `value`, `badge`, `switch`, `dim` |
+| `ui.list(rows, sel, top, x, y, w, rowh, n)` | Any vertical choice. The selected row is raised with an accent bar. Rows are tables (`label`, plus optional `value`, `badge`, `switch`, `dim`) or plain strings. Only visible rows are read, so long lists are cheap |
 | `ui.tabs(labels, active, y)` | Switching between modes of one app (Clock: Alarm, Timer, Stopwatch). Tab / Shift+Tab move between them. Returns the y below the tabs |
 | `ui.card(x, y, w, h, selected)` | Grouping a block of info. Selected cards get an accent outline |
 | `ui.big(y, text, colour, size)` | One dominant number: a clock, a result, a level |

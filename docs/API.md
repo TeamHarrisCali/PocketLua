@@ -35,6 +35,7 @@ return app
 | `sys.append_text(path, s)` | Appends without reading the file (logs, tracks) |
 | `sys.rename(from, to)` | Moves a file, replacing the destination |
 | `sys.list(dir)` | Directory listing |
+| `sys.list_names(dir [, "mp3,wav"])` | Sorted names as plain strings, folders first with a `/` suffix, files limited to the given extensions. Far smaller than `sys.list` for big folders |
 | `sys.exists(path)`, `sys.remove(path)`, `sys.mkdirs(path)`, `sys.storage()` | File helpers and storage info |
 | `sys.display_hold(on)` | Stop redrawing so the app can draw with `disp.*` |
 | `sys.screenshot(path)` | Save a screenshot |

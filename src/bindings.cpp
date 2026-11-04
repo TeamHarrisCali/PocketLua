@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "bindings.h"
 #include <vector>
 #include <M5Cardputer.h>
@@ -344,6 +345,35 @@ static int y_list(lua_State *L) {
   }
   return 1;
 }
+// list_names(dir [, "mp3,wav"]) -> sorted names as plain strings: folders
+// first with a "/" suffix, then files (only those extensions, if given). Much
+// smaller than list() for big folders such as a music library.
+static int y_list_names(lua_State *L) {
+  auto items = store::list(str(L, 1));
+  String exts = luaL_optstring(L, 2, "");
+  exts.toLowerCase();
+  std::vector<String> dirs, files;
+  for (auto &e : items) {
+    if (e.dir) { dirs.push_back(e.name + "/"); continue; }
+    if (exts.length()) {
+      int dot = e.name.lastIndexOf('.');
+      String ext = dot >= 0 ? e.name.substring(dot + 1) : "";
+      ext.toLowerCase();
+      if (!ext.length() || ("," + exts + ",").indexOf("," + ext + ",") < 0) continue;
+    }
+    files.push_back(e.name);
+  }
+  items.clear();
+  auto byName = [](const String &a, const String &b) { return strcasecmp(a.c_str(), b.c_str()) < 0; };
+  std::sort(dirs.begin(), dirs.end(), byName);
+  std::sort(files.begin(), files.end(), byName);
+  lua_createtable(L, dirs.size() + files.size(), 0);
+  int i = 1;
+  for (auto &n : dirs) { lua_pushstring(L, n.c_str()); lua_rawseti(L, -2, i++); }
+  for (auto &n : files) { lua_pushstring(L, n.c_str()); lua_rawseti(L, -2, i++); }
+  return 1;
+}
+
 // Free space needs a scan of the whole FAT, so it is cached for 30 s.
 static int y_storage(lua_State *L) {
   static uint32_t at = 0;
@@ -583,7 +613,7 @@ void registerApi(lua_State *L) {
       {"screenshot", y_screenshot}, {"reload", y_reload}, {"log", y_log}, {"recovered", y_recovered},
       {"read_text", y_read_text}, {"append_text", y_append_text}, {"rename", y_rename}, {"read_builtin", y_read_builtin}, {"loadfile", y_loadfile}, {"write_text", y_write_text}, {"remove", y_remove},
       {"exists", y_exists}, {"mkdirs", y_mkdirs}, {"in_storage", y_in_storage},
-      {"is_embedded", y_is_embedded}, {"list", y_list}, {"storage", y_storage}, {nullptr, nullptr}};
+      {"is_embedded", y_is_embedded}, {"list", y_list}, {"list_names", y_list_names}, {"storage", y_storage}, {nullptr, nullptr}};
   luaL_newlib(L, sysLib);
   lua_pushboolean(L, store::safeMode); lua_setfield(L, -2, "safe_mode");
   lua_pushstring(L, "0.1"); lua_setfield(L, -2, "version");
