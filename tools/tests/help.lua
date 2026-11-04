@@ -11,7 +11,7 @@ end
 local EXEMPT = { ["music.lua"] = true }
 local MAX_ENTRIES, MAX_KEY, MAX_TEXT = 12, 6, 22
 
-local p = io.popen("ls userland/apps/*.lua")
+local p = io.popen("ls userland/apps/*.lua store/apps/*.lua 2>/dev/null")
 local files = {}
 for f in p:lines() do files[#files + 1] = f end
 p:close()
