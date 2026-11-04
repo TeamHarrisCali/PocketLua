@@ -125,9 +125,20 @@ bool call(int nargs, int nresults) {
 // `tls = true` opens, while the arena is still empty: by the time the app
 // makes its first HTTPS request, Lua has broken the free space into pieces
 // smaller than the ~16.7 KB mbedTLS needs. Freed when the app closes.
-static const size_t TLS_SLAB = 17 * 1024;
-static void *slab = nullptr;
-static bool slabUsed = false;
+static const size_t TLS_SLAB = 17 * 1024, TLS_STACK = 8 * 1024;
+static void *slab = nullptr, *stackSlab = nullptr;  // the stack is for the app's network task
+static bool slabUsed = false, stackUsed = false;
+
+void *takeStack(size_t n) {
+  if (!stackSlab || stackUsed || n > TLS_STACK) return nullptr;
+  stackUsed = true;
+  return stackSlab;
+}
+bool giveStack(void *p) {
+  if (!p || p != stackSlab) return false;
+  stackUsed = false;
+  return true;
+}
 
 void *takeSlab(size_t n) {
   if (!slab || slabUsed || n > TLS_SLAB) return nullptr;
@@ -143,7 +154,10 @@ bool giveSlab(void *p) {
 bool open(bool reserveTls) {
   close();
   used = 0;
-  if (reserveTls && arena) slab = multi_heap_malloc(arena, TLS_SLAB);
+  if (reserveTls && arena) {
+    slab = multi_heap_malloc(arena, TLS_SLAB);
+    stackSlab = multi_heap_malloc(arena, TLS_STACK);
+  }
   L = lua_newstate(alloc, nullptr);
   if (!L) { lastError = "not enough memory"; return false; }
   luaL_requiref(L, "_G", luaopen_base, 1);
@@ -171,8 +185,9 @@ void close() {
   L = nullptr;
   used = 0;
   if (slab) multi_heap_free(arena, slab);
-  slab = nullptr;
-  slabUsed = false;
+  if (stackSlab) multi_heap_free(arena, stackSlab);
+  slab = stackSlab = nullptr;
+  slabUsed = stackUsed = false;
 }
 
 }  // namespace vm

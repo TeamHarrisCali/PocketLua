@@ -24,6 +24,9 @@ size_t arenaLargest();
 // false for any other pointer.
 void *takeSlab(size_t n);
 bool giveSlab(void *p);
+// The same for the network task's stack (8 KB), also set aside at open.
+void *takeStack(size_t n);
+bool giveStack(void *p);
 
 // reserveTls: set aside a block for a TLS record buffer first (apps with
 // `tls = true` in their header); see takeSlab.

@@ -373,7 +373,10 @@ TaskHandle_t handle = nullptr;  // stays set until the stack can be returned
 void releaseStack() {
   if (!stack) return;
   if (handle && eTaskGetState(handle) != eDeleted) return;  // still running
-  vm::arenaReturn(stack);
+  if (!vm::giveStack(stack)) {
+    if (vm::inArena(stack)) vm::arenaReturn(stack);
+    else heap_caps_free(stack);
+  }
   stack = nullptr;
   handle = nullptr;
 }
@@ -382,8 +385,16 @@ bool ensureTask() {
   if (!mu) mu = xSemaphoreCreateMutex();
   if (task) return true;
   releaseStack();
-  if (!stack) stack = (StackType_t *)vm::arenaBorrow(STACK_WORDS * sizeof(StackType_t));
-  if (!stack) return false;
+  size_t bytes = STACK_WORDS * sizeof(StackType_t);
+  // the block set aside when the app opened, else the arena, else the heap
+  if (!stack) stack = (StackType_t *)vm::takeStack(bytes);
+  if (!stack) stack = (StackType_t *)vm::arenaBorrow(bytes);
+  if (!stack) stack = (StackType_t *)heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  if (!stack) {
+    usbdev::log(String("discord: no memory for the task stack, heap largest=") +
+                heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + " arena largest=" + vm::arenaLargest());
+    return false;
+  }
   quit = false;
   task = handle = xTaskCreateStaticPinnedToCore(taskMain, "discord", STACK_WORDS, nullptr, 1, stack, &tcb, 0);
   return task != nullptr;
