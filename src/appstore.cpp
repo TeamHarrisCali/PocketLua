@@ -452,9 +452,16 @@ String result;  // what the last operation did, for the App Store app
 String restartInto;  // a firmware build that was just written: restart into it
 
 bool ready(String &err) {
+  // just after a restart Wi-Fi is still joining the network: give it 20 s
+  for (int i = 0; i < 200 && WiFi.getMode() != WIFI_OFF && WiFi.status() != WL_CONNECTED; i++) {
+    progress("Connecting to Wi-Fi...");
+    feedWatch();
+    delay(100);
+  }
   if (WiFi.status() != WL_CONNECTED) { err = "Wi-Fi isn't connected (Settings > Wi-Fi)"; return false; }
   for (int i = 0; i < 100 && time(nullptr) < 1700000000; i++) {  // the clock comes from the network
     progress("Waiting for the clock...");
+    feedWatch();
     delay(100);
   }
   if (time(nullptr) < 1700000000) { err = "the clock isn't set yet; try again in a moment"; return false; }
@@ -685,7 +692,31 @@ int l_channel(lua_State *L) {
 }  // namespace
 
 // For the shell, at boot: drop card copies that hide system files.
-void appstoreBoot() { cleanSystemCopies(); }
+// Firmware updates and channel switches need the most memory (a 2.7 MB
+// download beside Wi-Fi and TLS), and after a while of use the heap is
+// fragmented. So they are saved and the device restarts first; this runs
+// them at boot, before any app has run. The saved request is cleared before
+// it runs, so a failure can't repeat at every boot.
+static bool bootRun = false;  // the pending operation came from a restart
+
+void appstoreBoot() {
+  cleanSystemCopies();
+  String saved = cfgGet("store_boot");
+  if (!saved.length()) return;
+  cfgSet("store_boot", "");
+  settingsFlush();
+  int bar = saved.indexOf('|');
+  pendingOp = bar < 0 ? saved : saved.substring(0, bar);
+  pendingArg = bar < 0 ? "" : saved.substring(bar + 1);
+  bootRun = true;
+  usbdev::log("store: running " + pendingOp + " " + pendingArg + " after the restart");
+}
+
+// Whether an operation should wait for a restart (see appstoreBoot).
+static bool needsRestart(const String &op, const String &arg) {
+  if (bootRun) return false;
+  return op == "switch" || (op == "apply" && ("," + arg + ",").indexOf(",firmware,") >= 0);
+}
 
 // For the shell: an operation the App Store asked for, run with no app open.
 bool appstorePending() { return pendingOp.length() > 0; }
@@ -693,6 +724,15 @@ void appstoreRun() {
   String op = pendingOp, arg = pendingArg;
   pendingOp = pendingArg = "";
   result = "";
+  if (needsRestart(op, arg)) {
+    usbdev::log("store: " + op + " " + arg + " saved, restarting first to have the memory");
+    cfgSet("store_boot", op + "|" + arg);
+    settingsFlush();
+    progress("Restarting first to make room...", 0);
+    delay(1200);
+    ESP.restart();
+  }
+  bootRun = false;
   usbdev::log("store: " + op + " " + arg + " (channel " + channel() + ")");
   if (op == "check") check();
   else if (op == "apply") apply(arg);
