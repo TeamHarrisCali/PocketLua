@@ -43,34 +43,36 @@ local data = {
 }
 
 local icons = {}
-local ARGS = { L = 4, F = 4, R = 4, r = 5, Q = 5, C = 3, D = 3, T = 6, A = 6 }
-local XY = { L = "xyxy", F = "xy..", R = "xy..", r = "xy...", Q = "xy...", C = "xy.", D = "xy.", T = "xyxyxy", A = "xy...." }
-local CALL = { L = "line", F = "fill", R = "rect", r = "rrect", Q = "rfill", C = "circle", D = "disc", T = "tri", A = "arc" }
-local parsed = {}  -- name -> list of { fn, a1..an, colour flag }, built on first use
+local parsed = {}  -- name -> list of { code, n1, n2, ..., is_tile_colour }, built on first use
 
 local function parse(name)
   local list = {}
-  for code, nums, c in (data[name] or data.app):gmatch("(%a)([%-%d,]*)([fb])") do
-    local op = { gfx[CALL[code]], XY[code], c == "b" }
+  for code, nums, c in data[name]:gmatch("(%a)([%-%d,]*)([fb])") do
+    local op = { code }
     for v in nums:gmatch("%-?%d+") do op[#op + 1] = tonumber(v) end
+    op[#op + 1] = c == "b"
     list[#list + 1] = op
   end
   parsed[name] = list
   return list
 end
 
--- Draws icon `name` centred at (x, y).
+-- Draws icon `name` centred at (x, y). Direct calls per op: no garbage per frame.
 function icons.draw(name, x, y, fg, bg)
-  local list = parsed[name] or parse(data[name] and name or "app")
-  for _, op in ipairs(list) do
-    local a, map = {}, op[2]
-    for i = 4, #op do
-      local k = map:sub(i - 3, i - 3)
-      local v = op[i]
-      a[i - 3] = k == "x" and x + v or k == "y" and y + v or v
-    end
-    a[#a + 1] = op[3] and bg or fg
-    op[1](table.unpack(a))
+  if not data[name] then name = "app" end
+  local list = parsed[name] or parse(name)
+  for i = 1, #list do
+    local o = list[i]
+    local c, k = o[#o] and bg or fg, o[1]
+    if k == "L" then gfx.line(x + o[2], y + o[3], x + o[4], y + o[5], c)
+    elseif k == "F" then gfx.fill(x + o[2], y + o[3], o[4], o[5], c)
+    elseif k == "R" then gfx.rect(x + o[2], y + o[3], o[4], o[5], c)
+    elseif k == "r" then gfx.rrect(x + o[2], y + o[3], o[4], o[5], o[6], c)
+    elseif k == "Q" then gfx.rfill(x + o[2], y + o[3], o[4], o[5], o[6], c)
+    elseif k == "C" then gfx.circle(x + o[2], y + o[3], o[4], c)
+    elseif k == "D" then gfx.disc(x + o[2], y + o[3], o[4], c)
+    elseif k == "T" then gfx.tri(x + o[2], y + o[3], x + o[4], y + o[5], x + o[6], y + o[7], c)
+    elseif k == "A" then gfx.arc(x + o[2], y + o[3], o[4], o[5], o[6], o[7], c) end
   end
 end
 

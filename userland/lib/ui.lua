@@ -58,17 +58,30 @@ function ui.set_accent(name) ui.accent = ui.accents[name] and name or "blue"; ap
 -- Filled in by the shell once a second.
 ui.status = { pct = 0, charging = false, wifi = 0, wifi_on = false, time = nil, unread = 0 }
 
+-- ---------------------------------------------------------------- bands
+-- The screen is drawn in horizontal bands (draw() runs once per band). Skip
+-- anything outside the current one: ui.visible(y, h).
+gfx.band_y, gfx.band_h = gfx.band_y or 0, gfx.band_h or ui.H
+function ui.visible(y, h)
+  local by = gfx.band_y
+  return y + h > by and y < by + gfx.band_h
+end
+local visible = ui.visible
+
 -- ---------------------------------------------------------------- text
-function ui.text(x, y, s, c, size) gfx.text(x, y, s, c or col.text, size or 1) end
+function ui.text(x, y, s, c, size)
+  size = size or 1
+  if visible(y, 8 * size) then gfx.text(x, y, s, c or col.text, size) end
+end
 
 function ui.center(y, s, c, size)
   size = size or 1
-  gfx.text(math.floor((ui.W - #s * 6 * size) / 2), y, s, c or col.text, size)
+  if visible(y, 8 * size) then gfx.text(math.floor((ui.W - #s * 6 * size) / 2), y, s, c or col.text, size) end
 end
 
 function ui.right(x, y, s, c, size)
   size = size or 1
-  gfx.text(x - #s * 6 * size, y, s, c or col.text, size)
+  if visible(y, 8 * size) then gfx.text(x - #s * 6 * size, y, s, c or col.text, size) end
 end
 
 function ui.fit(s, maxw, size)
@@ -107,6 +120,7 @@ function ui.big(y, s, c, size) ui.center(y, s, c or col.text, size or 3) end
 -- ---------------------------------------------------------------- footer
 -- Footer with keycap hints: ui.footer({ {"Enter", "Open"}, {"Esc", "Back"} }).
 function ui.footer(hints)
+  if not visible(124, 11) then return end
   gfx.fill(0, 124, ui.W, 11, col.bg)
   local x = 3
   for _, h in ipairs(hints) do
@@ -122,6 +136,7 @@ end
 
 -- Plain one-line footer (older apps).
 function ui.hint(s)
+  if not visible(124, 11) then return end
   gfx.fill(0, 124, ui.W, 11, col.bg)
   gfx.text(4, 126, s, col.muted)
 end
@@ -194,6 +209,7 @@ end
 
 -- ---------------------------------------------------------------- status bar
 function ui.statusbar(title)
+  if not visible(0, ui.BAR) then return end
   local S = ui.status
   gfx.fill(0, 0, ui.W, ui.BAR, col.surface)
 
@@ -239,6 +255,7 @@ end
 
 -- A rounded app tile with its icon, `size` pixels square, top-left at (x, y).
 function ui.tile(x, y, size, name, color)
+  if not visible(y, size) then return end
   gfx.rfill(x, y, size, size, math.floor(size / 4), color)
   ui.icon(name, x + math.floor(size / 2), y + math.floor(size / 2), col.white, color)
 end
@@ -254,6 +271,7 @@ function ui.list(rows, sel, top, x, y, w, rowh, nrows)
     local r = rows[top + i]
     if not r then break end
     local ry = y + i * rowh
+    if not visible(ry, rowh) then goto continue end
     local on = (top + i) == sel
     if on then
       gfx.rfill(x, ry, w, rowh - 1, 4, col.surface2)
@@ -276,6 +294,7 @@ function ui.list(rows, sel, top, x, y, w, rowh, nrows)
       right_w = #v * 6 + 10
     end
     gfx.text(tx, ty, ui.fit(r.label, w - (tx - x) - right_w - 2), fg)
+    ::continue::
   end
   if #rows > nrows then
     local bh = math.max(6, math.floor((nrows * rowh) * nrows / #rows))

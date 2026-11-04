@@ -153,6 +153,17 @@ static void closeLua() {
   L = nullptr;
 }
 
+// gfx.band_y / gfx.band_h tell Lua which rows the current band covers, so
+// drawing code can skip what lies outside it (ui.visible).
+static void setBand() {
+  lua_getglobal(L, "gfx");
+  lua_pushinteger(L, g_bandY);
+  lua_setfield(L, -2, "band_y");
+  lua_pushinteger(L, BAND_H);
+  lua_setfield(L, -2, "band_h");
+  lua_pop(L, 1);
+}
+
 // Renders the next frame band by band into a 24-bit BMP (top-down rows).
 static bool writeScreenshot(const String &path) {
   String real;
@@ -170,6 +181,7 @@ static bool writeScreenshot(const String &path) {
   f.write(h, 54);
   uint8_t row[SCREEN_W * 3];
   for (g_bandY = 0; g_bandY < SCREEN_H; g_bandY += BAND_H) {
+    setBand();
     callGlobal("on_draw", nullptr);
     for (int y = 0; y < BAND_H && g_bandY + y < SCREEN_H; y++) {
       for (int x = 0; x < SCREEN_W; x++) {
@@ -412,6 +424,7 @@ static void osTask(void *) {
       });
     } else if (!g_displayAsleep && !g_displayHold) {
       for (g_bandY = 0; g_bandY < SCREEN_H; g_bandY += BAND_H) {
+        setBand();
         ok = callGlobal("on_draw", nullptr) && ok;
         canvas.pushSprite(0, g_bandY);
       }

@@ -234,10 +234,19 @@ static int y_list(lua_State *L) {
   }
   return 1;
 }
+// Free space needs a scan of the whole FAT, so it is cached for 30 s.
 static int y_storage(lua_State *L) {
+  static uint32_t at = 0;
+  static float total = 0, used = 0;
+  if (!at || millis() - at > 30000) {
+    total = (float)(store::totalBytes() / 1024);
+    used = (float)(store::usedBytes() / 1024);
+    at = millis();
+    luaBudgetReset();
+  }
   lua_pushstring(L, store::kind());
-  lua_pushnumber(L, (lua_Number)(store::totalBytes() / 1024));
-  lua_pushnumber(L, (lua_Number)(store::usedBytes() / 1024));
+  lua_pushnumber(L, total);
+  lua_pushnumber(L, used);
   return 3;
 }
 

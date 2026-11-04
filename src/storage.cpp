@@ -14,14 +14,11 @@ static bool sdOk = false;
 static bool locked = false;
 static const char *ROOT = "/liveos";
 
-// The SD card driver holds ~18 KB of RAM while mounted, so the card is mounted
-// only while files are being used and unmounted after IDLE_MS (see idleTick).
-// Long users (audio streaming, USB sharing) pin it.
+// The card stays mounted; use() remounts it after USB sharing released it.
 static bool mounted = false;
 static bool needScan = false;
 static volatile int pins = 0;
 static uint32_t lastUse = 0;
-static const uint32_t IDLE_MS = 4000;
 
 static bool sdMount() { return SD.begin(12, SPI, 25000000, "/sd", 2); }
 
@@ -39,12 +36,9 @@ static fs::FS *use() {
   return fsys;
 }
 
-void idleTick() {
-  if (sdOk && mounted && pins == 0 && !locked && millis() - lastUse > IDLE_MS) {
-    SD.end();
-    mounted = false;
-  }
-}
+// Unmounting when idle was tried and reverted: remounting stalls the UI for
+// hundreds of ms and repeated mount cycles lost heap. The card stays mounted.
+void idleTick() {}
 
 void pin(bool on) {
   if (on) { pins = pins + 1; use(); }

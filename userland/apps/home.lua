@@ -135,12 +135,14 @@ function app.draw()
     local title = a == NEW and "New app" or TITLE[a]
     local c, r = (i - 1) % COLS, (i - 1) // COLS
     local cx, cy = c * CELL_W, GY + r * CELL_H
+    if not ui.visible(cy - 2, CELL_H + 1) then goto next_cell end
     local on = (first + i) == sel
     if on then ui.card(cx + 3, cy - 2, CELL_W - 6, CELL_H - 1, true) end
     if a == NEW then ui.tile(cx + 15, cy + 1, 30, "plus", col.surface2)
     else ui.tile(cx + 15, cy + 1, 30, ICON[a], COLOR[a]) end
     local label = ui.fit(title, CELL_W - 6)
     ui.text(cx + math.floor((CELL_W - #label * 6) / 2), cy + 33, label, on and col.text or col.muted)
+    ::next_cell::
   end
   if #shown == 0 then ui.center(70, "No apps match", col.muted) end
 

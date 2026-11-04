@@ -16,3 +16,4 @@ extern String g_screenshotPath;
 static const int SCREEN_W = 240, SCREEN_H = 135;
 extern String g_recoveredMsg;
 size_t luaMemUsed();
+void luaBudgetReset();
