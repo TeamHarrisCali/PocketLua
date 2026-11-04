@@ -66,19 +66,27 @@ bool allocTls() {
 }
 
 String ioError;  // why the last socket read/write failed, for the log
-struct IoStats { uint32_t readMs, writeMs, readBytes, writeBytes, reads, writes; } ioStats;  // per request
+struct IoStats { uint32_t readMs, writeMs, readBytes, writeBytes, reads, writes, lastIo, longestGap; } ioStats;  // per request
+// The longest stretch between two socket calls: BearSSL computing (the
+// certificate check and key exchange happen between reading the server's
+// flight and writing ours).
+void ioGap() {
+  uint32_t now = millis();
+  if (ioStats.lastIo && now - ioStats.lastIo > ioStats.longestGap) ioStats.longestGap = now - ioStats.lastIo;
+}
 
 // Socket I/O for BearSSL. "Nothing yet" and a full send buffer are waited
 // out (up to 10 s); only a closed connection or a timeout is an error.
 int sockRead(void *ctx, unsigned char *buf, size_t len) {
   WiFiClient *c = (WiFiClient *)ctx;
+  ioGap();
   uint32_t t0 = millis();
   ioStats.reads++;
   while (millis() - t0 < 10000) {
     int avail = c->available();
     if (avail > 0) {
       int n = c->read(buf, len < (size_t)avail ? len : (size_t)avail);
-      if (n > 0) { ioStats.readMs += millis() - t0; ioStats.readBytes += n; return n; }
+      if (n > 0) { ioStats.readMs += millis() - t0; ioStats.readBytes += n; ioStats.lastIo = millis(); return n; }
     } else if (!c->connected()) {
       ioError = "read: connection closed";
       return -1;
@@ -90,11 +98,12 @@ int sockRead(void *ctx, unsigned char *buf, size_t len) {
 }
 int sockWrite(void *ctx, const unsigned char *buf, size_t len) {
   WiFiClient *c = (WiFiClient *)ctx;
+  ioGap();
   uint32_t t0 = millis();
   ioStats.writes++;
   while (millis() - t0 < 10000) {
     size_t n = c->write(buf, len);
-    if (n > 0) { ioStats.writeMs += millis() - t0; ioStats.writeBytes += n; return (int)n; }
+    if (n > 0) { ioStats.writeMs += millis() - t0; ioStats.writeBytes += n; ioStats.lastIo = millis(); return (int)n; }
     if (!c->connected()) {
       ioError = "write: connection closed";
       return -1;
@@ -290,7 +299,8 @@ int request(const char *method, const String &path, const String &body, Json &js
     uint32_t total = millis() - t0;
     return String(" [") + total + " ms: wrote " + ioStats.writeBytes + " B in " + ioStats.writes + " (" + ioStats.writeMs + " ms), read " +
            ioStats.readBytes + " B in " + ioStats.reads + " (" + ioStats.readMs + " ms), compute ~" +
-           (total - ioStats.readMs - ioStats.writeMs) + " ms, cpu " + getCpuFrequencyMhz() + " MHz]";
+           (total - ioStats.readMs - ioStats.writeMs) + " ms, longest compute " + ioStats.longestGap + " ms, cpu " +
+           getCpuFrequencyMhz() + " MHz]";
   };
   if (br_sslio_write_all(&io, req.c_str(), req.length()) < 0 || br_sslio_flush(&io) < 0) {
     usbdev::log(String("discord: TLS handshake failed, BearSSL error ") + br_ssl_engine_last_error(&tls->sc.eng) +

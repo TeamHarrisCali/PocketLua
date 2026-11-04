@@ -26,6 +26,8 @@ static const int BAND_H = (SCREEN_H + 3) / 4, SLIM_BAND_H = (SCREEN_H + 7) / 8;
 int g_bandY = 0;
 int g_bandH = BAND_H;
 
+bool discordBusy();  // discord.cpp
+
 void setFrameSlim(bool slim) {
   int h = slim ? SLIM_BAND_H : BAND_H;
   if (h == g_bandH) return;
@@ -278,7 +280,10 @@ static void osMain() {
       }
       g_bandY = 0;
     }
-    uint32_t frameMs = g_displayAsleep ? 100 : 33;  // asleep: poll less, save battery
+    // While a TLS handshake runs on core 0, run this loop slowly: both cores
+    // share the flash cache, and redrawing through Lua 30 times a second kept
+    // evicting BearSSL's code and tables.
+    uint32_t frameMs = g_displayAsleep ? 100 : discordBusy() ? 150 : 33;  // asleep: poll less, save battery
     uint32_t el = millis() - t0;
     if (el < frameMs) delay(frameMs - el);
   }
