@@ -11,21 +11,30 @@ local function channel_row()
   local as = appstore
   if not as then return nil end
   local cur = as.channel()
-  return { label = "Updates", value = cur == "main" and "Release" or "Beta", enter = function()
+  local function switch()
+    sys.log("updates: change asked on " .. cur)
     if cur == "main" then
       shell.confirm("Join Beta", "Test builds of the firmware and apps arrive first. Installs Beta now and restarts. Leaving later is harder.",
-        function(yes) if yes then as.run("switch", "beta") end end)
+        function(yes)
+          sys.log("updates: join beta " .. (yes and "yes" or "no"))
+          if yes then as.run("switch", "beta") end
+        end)
       return
     end
     shell.confirm("Leave Beta", "Go back to Release? It reinstalls the older firmware and apps; Beta data may not work there.",
       function(yes)
+        sys.log("updates: leave beta " .. (yes and "yes" or "no"))
         if not yes then return end
         shell.prompt("Type RELEASE to confirm", "", function(text)
-          if text and text:upper():gsub("%s", "") == "RELEASE" then as.run("switch", "main")
+          local ok = text and text:upper():gsub("%s", "") == "RELEASE"
+          sys.log("updates: typed " .. (ok and "RELEASE" or text and "something else" or "nothing (cancelled)"))
+          if ok then as.run("switch", "main")
           elseif text then shell.toast("Still on Beta (type RELEASE)", 3) end
         end)
       end)
-  end }
+  end
+  -- Enter or <> (the footer's "Change") start the same, guarded, switch
+  return { label = "Updates", value = cur == "main" and "Release" or "Beta", enter = switch, left = switch, right = switch }
 end
 
 -- ---------------------------------------------------------------- About

@@ -384,6 +384,13 @@ key("enter")
 check(shows("Join Beta"), "channel: joining Beta asks once")
 key("y")
 check(lastrun() == "switch beta" and not shows("Type RELEASE"), "channel: yes switches to Beta, no typing")
+shell.home(); frames(2)
+AS.runs = {}
+updates_row()
+key("right")
+check(shows("Join Beta"), "channel: <> (the footer's Change) asks too")
+key("n")
+check(lastrun() == "", "channel: no keeps the channel")
 no_error("settings")
 shell.home(); frames(2)
 
