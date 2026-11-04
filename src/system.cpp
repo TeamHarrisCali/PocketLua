@@ -76,19 +76,32 @@ static const Note S_LOW[] = {{784, 120}, {523, 200}, {0, 0}};
 static const Note S_ALARM[] = {{1760, 150}, {1, 100}, {1760, 150}, {1, 100}, {1760, 150}, {1, 400}, {0, 0}};
 static const Note *tune = nullptr;
 static float tuneLeft = 0;
+static bool tuneQuiet = false;  // the boot chime plays at a quarter of the volume
+
+static void tuneVolume(bool quiet) {
+  int v = cget("vol", "100").toInt();
+  M5Cardputer.Speaker.setVolume(quiet ? max(v / 4, 12) : v);
+  tuneQuiet = quiet;
+}
 
 static void sound(const char *kind, bool force = false) {
   if (!force && cget("sounds") == "0") return;
+  if (tuneQuiet) tuneVolume(false);
   tune = !strcmp(kind, "boot") ? S_BOOT : !strcmp(kind, "notify") ? S_NOTIFY : !strcmp(kind, "error") ? S_ERROR
        : !strcmp(kind, "low") ? S_LOW : !strcmp(kind, "alarm") ? S_ALARM : nullptr;
   tuneLeft = 0;
+  if (tune == S_BOOT) tuneVolume(true);
 }
 
 static void soundTick(float dt) {
   if (!tune) return;
   tuneLeft -= dt * 1000;
   if (tuneLeft > 0) return;
-  if (!tune->ms) { tune = nullptr; return; }
+  if (!tune->ms) {
+    tune = nullptr;
+    if (tuneQuiet) tuneVolume(false);
+    return;
+  }
   if (tune->f > 1) playTone(tune->f, tune->ms);
   tuneLeft = tune->ms;
   tune++;
