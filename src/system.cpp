@@ -4,6 +4,7 @@
 #include <M5Cardputer.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
+#include <esp_rom_crc.h>
 #include <algorithm>
 #include <functional>
 #include <time.h>
@@ -961,7 +962,62 @@ static String b64encode(const char *s, size_t n) {
   return out;
 }
 
+// "!fput <path> <bytes>" streams a large file (a firmware update) straight to
+// storage: base64 lines follow until <bytes> have arrived. The UI is paused
+// meanwhile; USB flow control paces the host. The file is written as .part and
+// renamed at the end. Replies "ok <path> <bytes> <crc32>".
+static void conPut(const String &arg) {
+  int sp = arg.lastIndexOf(' ');
+  String path = sp > 0 ? arg.substring(0, sp) : "";
+  size_t total = sp > 0 ? arg.substring(sp + 1).toInt() : 0;
+  String real;
+  fs::FS *fs = path.length() ? store::resolve(path, real, true) : nullptr;
+  File f;
+  if (!fs || !total || !(f = fs->open(real + ".part", "w"))) { reply("error: cannot write " + path); return; }
+  wake();
+  auto &d = M5Cardputer.Display;
+  d.fillRect(20, 45, 200, 45, ui::col.surface);
+  d.setTextColor(ui::col.text);
+  d.drawString("Receiving " + path, 28, 52);
+  reply("ready");
+
+  size_t got = 0, nextDraw = 0;
+  uint32_t crc = 0, last = millis();
+  String in = conBuf;
+  conBuf = "";
+  while (got < total && millis() - last < 3000) {
+    int nl = in.indexOf('\n');
+    if (nl < 0) {
+      String s = usbdev::serialRead();
+      if (s.length()) { in += s; last = millis(); } else delay(1);
+      if (in.length() > 8192) break;  // not base64 lines
+      continue;
+    }
+    String chunk = b64decode(in.substring(0, nl));
+    in.remove(0, nl + 1);
+    if (f.write((const uint8_t *)chunk.c_str(), chunk.length()) != chunk.length()) break;
+    crc = esp_rom_crc32_le(crc, (const uint8_t *)chunk.c_str(), chunk.length());
+    got += chunk.length();
+    if (got >= nextDraw) {
+      d.fillRect(28, 72, (int)(184ULL * got / total), 8, ui::col.accent);
+      nextDraw = got + 32768;
+    }
+  }
+  f.close();
+  if (got != total) {
+    fs->remove(real + ".part");
+    reply("error: got " + String(got) + " of " + String(total) + " bytes");
+    return;
+  }
+  fs->remove(real);
+  fs->rename(real + ".part", real);
+  reply("ok " + path + " " + String(got) + " " + String(crc, HEX));
+  usbdev::log("received " + path + " (" + String(got) + " bytes)");
+  notify("Received " + path, String(got / 1024) + " KB");
+}
+
 static void conLine(String line) {
+  while (line.length() && line[0] == 0x05) line.remove(0, 1);  // log backlog requests
   line.trim();
   if (!line.length()) return;
   if (line[0] == '!') {
@@ -981,7 +1037,8 @@ static void conLine(String line) {
       if (!store::view(arg, buf, p, n)) { reply("error: not found"); return; }
       for (size_t i = 0; i < n; i += 768) reply("!data " + b64encode(p + i, min((size_t)768, n - i)));
       reply("!end");
-    } else if (cmd == "run") { launch(arg); reply("ok"); }
+    } else if (cmd == "fput") conPut(arg);
+    else if (cmd == "run") { launch(arg); reply("ok"); }
     else if (cmd == "ls") { for (auto &e : store::list(arg)) reply(String(e.dir ? "d " : "- ") + e.name); }
     else if (cmd == "log") {
       String r = usbdev::logDump();
@@ -990,6 +1047,7 @@ static void conLine(String line) {
     } else reply("error: unknown command");
     return;
   }
+  if (!conOn) { reply("Lua console is off (Settings > USB)"); return; }
   if (!vm::L) { reply("no app is open: open the Lua REPL app to evaluate Lua"); return; }
   lua_State *L = vm::L;
   String chunk = "return " + line;
@@ -1011,8 +1069,9 @@ static void conLine(String line) {
   lua_settop(L, top);
 }
 
+// "!" file commands work whenever USB serial is on; evaluating Lua needs the
+// Lua console setting.
 static void conPoll() {
-  if (!conOn) return;
   String s = usbdev::serialRead();
   if (!s.length()) return;
   conBuf += s;

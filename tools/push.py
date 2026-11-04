@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Talk to a LiveOS device over USB serial (enable Serial port + Lua console in
-Settings > USB first). Standard library only.
+"""Talk to a LiveOS device over USB serial (Serial port on in Settings > USB;
+eval also needs the Lua console). Standard library only.
 
+  push.py send dist/LiveOS.bin LiveOS.bin    (large files, streamed to the card)
   push.py put userland/apps/foo.lua apps/foo.lua [--run foo]
   push.py get apps/foo.lua local_copy.lua
   push.py eval "sys.heap()"
   push.py run foo | reload | ls apps
 """
-import argparse, base64, os, sys, termios, time
+import argparse, base64, fcntl, os, struct, sys, termios, time, zlib
 
 
 def open_port(path):
@@ -18,6 +19,10 @@ def open_port(path):
     attrs[4] = attrs[5] = termios.B115200
     attrs[6][termios.VMIN], attrs[6][termios.VTIME] = 0, 1
     termios.tcsetattr(fd, termios.TCSANOW, attrs)
+    # the device only talks once DTR and RTS are both up
+    fcntl.ioctl(fd, termios.TIOCMBIS, struct.pack("I", termios.TIOCM_DTR | termios.TIOCM_RTS))
+    time.sleep(0.2)
+    termios.tcflush(fd, termios.TCIFLUSH)
     return fd
 
 
@@ -28,7 +33,15 @@ def read_line(fd, timeout=3.0):
         if c == b"\n":
             return buf.decode(errors="replace").strip()
         buf += c
-    raise TimeoutError("no reply from the device (is the Lua console on?)")
+    raise TimeoutError("no reply from the device (is its USB serial port on?)")
+
+
+def reply_line(fd, timeout=3.0):
+    """The next line that is not a "# " log line."""
+    while True:
+        line = read_line(fd, timeout)
+        if not line.startswith("#"):
+            return line
 
 
 def send(fd, line):
@@ -38,32 +51,50 @@ def send(fd, line):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", default="/dev/ttyACM0")
-    ap.add_argument("cmd", choices=["put", "get", "eval", "run", "reload", "ls"])
+    ap.add_argument("cmd", choices=["send", "put", "get", "eval", "run", "reload", "ls"])
     ap.add_argument("args", nargs="*")
     ap.add_argument("--run", help="launch this app after put")
     a = ap.parse_args()
     fd = open_port(a.port)
     send(fd, "")  # flush any half-typed line
 
-    if a.cmd == "put":
+    if a.cmd == "send":
+        local, remote = a.args
+        data = open(local, "rb").read()
+        send(fd, f"!fput {remote} {len(data)}")
+        r = reply_line(fd)
+        if r != "ready":
+            sys.exit(r)
+        step = 1536  # 2048 base64 characters per line
+        t0 = time.time()
+        for i in range(0, len(data), step):
+            send(fd, base64.b64encode(data[i:i + step]).decode())
+            if i % (step * 64) == 0:
+                print(f"\r{100 * i // len(data)}%", end="", flush=True)
+        r = reply_line(fd, 30)
+        expect = f"ok {remote} {len(data)} {zlib.crc32(data):x}"
+        print(f"\r{r} ({time.time() - t0:.0f} s)")
+        if r != expect:
+            sys.exit("transfer check failed, expected: " + expect)
+    elif a.cmd == "put":
         local, remote = a.args
         data = open(local, "rb").read()
         send(fd, "!begin " + remote)
-        print(read_line(fd))
+        print(reply_line(fd))
         for i in range(0, len(data), 768):
             send(fd, "!data " + base64.b64encode(data[i:i + 768]).decode())
-            read_line(fd)
+            reply_line(fd)
         send(fd, "!end")
-        print(read_line(fd))
+        print(reply_line(fd))
         if a.run:
             send(fd, "!run " + a.run)
-            print(read_line(fd))
+            print(reply_line(fd))
     elif a.cmd == "get":
         remote, local = a.args
         send(fd, "!get " + remote)
         out = b""
         while True:
-            line = read_line(fd)
+            line = reply_line(fd)
             if line.startswith("!data "):
                 out += base64.b64decode(line[6:])
             elif line == "!end":
@@ -82,7 +113,7 @@ def main():
         print(os.read(fd, 4096).decode(errors="replace"), end="")
     else:
         send(fd, "!" + a.cmd + (" " + a.args[0] if a.args else ""))
-        print(read_line(fd))
+        print(reply_line(fd))
 
 
 if __name__ == "__main__":

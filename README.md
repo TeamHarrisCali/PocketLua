@@ -6,6 +6,8 @@ A live-editable OS for the M5Stack Cardputer ADV. The C++ core owns the hardware
 
 Copy `dist/LiveOS.bin` to the SD card and launch it from M5Launcher. It is a plain app image, so Launcher is untouched. To flash directly instead, hold G0 while resetting and run `pio run -t upload`.
 
+Updates without moving the card: with LiveOS running and plugged in over USB, `tools/deploy.sh` builds and sends the firmware to `/liveos/LiveOS.bin` on the card (about a minute, with a progress bar on the device). Then restart and install that file from M5Launcher.
+
 ## Keys
 
 | Key | Action |

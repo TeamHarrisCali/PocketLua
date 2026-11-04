@@ -16,7 +16,8 @@ Open issues found on the device. Newest first.
   DAC (check whether the ADV switches the jack and speaker automatically or needs a register
   or amp-enable change). Memory: a fixed-point MP3 decoder (Helix) needs about 25–30 KB plus
   buffers, so decode in a task with fixed buffers and no Lua VM while playing in the
-  background.
+  background. When the player starts, it turns off services it doesn't need (Wi-Fi, NTP,
+  roaming, ESP-NOW, the mic) to free RAM and CPU, and restores them when it closes.
 
 ## Done
 
