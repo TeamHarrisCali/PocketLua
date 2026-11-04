@@ -64,20 +64,41 @@ bool allocTls() {
   return tls && iobuf;
 }
 
+String ioError;  // why the last socket read/write failed, for the log
+
+// Socket I/O for BearSSL. "Nothing yet" and a full send buffer are waited
+// out (up to 10 s); only a closed connection or a timeout is an error.
 int sockRead(void *ctx, unsigned char *buf, size_t len) {
   WiFiClient *c = (WiFiClient *)ctx;
   uint32_t t0 = millis();
   while (millis() - t0 < 10000) {
-    int n = c->read(buf, len);
-    if (n > 0) return n;
-    if (!c->connected()) return -1;
+    int avail = c->available();
+    if (avail > 0) {
+      int n = c->read(buf, len < (size_t)avail ? len : (size_t)avail);
+      if (n > 0) return n;
+    } else if (!c->connected()) {
+      ioError = "read: connection closed";
+      return -1;
+    }
     delay(2);
   }
+  ioError = "read: no data for 10 s";
   return -1;
 }
 int sockWrite(void *ctx, const unsigned char *buf, size_t len) {
-  size_t n = ((WiFiClient *)ctx)->write(buf, len);
-  return n > 0 ? (int)n : -1;
+  WiFiClient *c = (WiFiClient *)ctx;
+  uint32_t t0 = millis();
+  while (millis() - t0 < 10000) {
+    size_t n = c->write(buf, len);
+    if (n > 0) return (int)n;
+    if (!c->connected()) {
+      ioError = "write: connection closed";
+      return -1;
+    }
+    delay(5);
+  }
+  ioError = "write: blocked for 10 s";
+  return -1;
 }
 
 // ---------------------------------------------------------------- JSON
@@ -243,8 +264,13 @@ int request(const char *method, const String &path, const String &body, Json &js
                "\r\nUser-Agent: DiscordBot (https://github.com/, 1) LiveOS\r\n";
   if (body.length()) req += "Content-Type: application/json\r\nContent-Length: " + String(body.length()) + "\r\n";
   req += "\r\n" + body;
+  uint32_t t0 = millis();
+  ioError = "";
   if (br_sslio_write_all(&io, req.c_str(), req.length()) < 0 || br_sslio_flush(&io) < 0) {
-    usbdev::log(String("discord: TLS handshake failed, BearSSL error ") + br_ssl_engine_last_error(&tls->sc.eng));
+    usbdev::log(String("discord: TLS handshake failed, BearSSL error ") + br_ssl_engine_last_error(&tls->sc.eng) +
+                (ioError.length() ? " (" + ioError + ")" : String("")) + " after " + (millis() - t0) +
+                " ms, heap free=" + heap_caps_get_free_size(MALLOC_CAP_8BIT) + " largest=" +
+                heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     tcp.stop();
     busy = false;
     return -1;
@@ -252,7 +278,7 @@ int request(const char *method, const String &path, const String &body, Json &js
   static bool shown = false;  // the margin, once per boot
   if (!shown) {
     shown = true;
-    usbdev::log(String("discord: connected (BearSSL), heap free=") + heap_caps_get_free_size(MALLOC_CAP_8BIT) +
+    usbdev::log(String("discord: connected (BearSSL) in ") + (millis() - t0) + " ms, heap free=" + heap_caps_get_free_size(MALLOC_CAP_8BIT) +
                 " largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + " arena free=" + vm::arenaFree());
   }
   int status = 0;
