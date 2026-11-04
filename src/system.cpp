@@ -19,6 +19,7 @@
 extern bool g_displayAsleep;
 extern bool g_displayHold;
 extern String g_screenshotPath;
+void feedWatch();  // main.cpp
 extern M5Canvas canvas;
 
 using ui::col;
@@ -26,8 +27,10 @@ using ui::col;
 extern const char *volatile g_crumb;  // main.cpp: what the main loop is doing
 bool appstorePending();  // appstore.cpp: the App Store asked for a download
 void appstoreRun();
+void appstoreBoot();  // at boot: drop card copies that hide built-in system files
 void hwReleaseAudio();  // hw.cpp: speaker and mic off when idle
 void hwReleaseDrivers();  // hw.cpp: LoRa and GPS off
+bool hwAudioBusy();       // hw.cpp: recording or playing
 
 String tlsBench();  // tlsbench.cpp: crypto speed test (USB console !bench)
 
@@ -881,6 +884,16 @@ static String sleepLabel(int s) {
   return String(s / 60) + " min";
 }
 
+// Fn+- / Fn+=: volume from anywhere, in 8 steps.
+static void volumeKey(int d) {
+  int v = constrain(cget("vol", "100").toInt() + d * 32, 0, 255);
+  if (d > 0 && v > 224) v = 255;  // the last step reaches full volume
+  cfgSet("vol", String(v));
+  M5Cardputer.Speaker.setVolume(v);
+  toast(v ? String("Volume ") + (v * 100 + 127) / 255 + "%" : String("Volume off"), 1.2);
+  if (!hwAudioBusy()) playTone(880, 50);  // something to hear, unless audio is already playing
+}
+
 static void quickAdjust(int i, int d) {
   if (i == 0) {
     int v = constrain(cget("bright", "160").toInt() + d * 32, 16, 255);
@@ -1030,6 +1043,7 @@ static void openHelp() {
   helpAdd("Fn+N", "Notifications");
   helpAdd("Fn+P", "Screenshot");
   helpAdd("Fn+L", "Lock");
+  helpAdd("Fn+- =", "Volume down / up");
   helpAdd("Fn+;.,/", "Arrow keys");
   helpAdd("Fn+`", "Esc");
   overlay = OV_HELP;
@@ -1227,7 +1241,20 @@ static void conLine(String line) {
       recvPath = recvData = "";
       appsDirty = true;
     } else if (cmd == "get") {
-      String buf;
+      // streamed from the card in pieces (a screenshot is ~97 KB: no copy in RAM)
+      File f = store::openStored(arg);
+      if (f) {
+        uint8_t piece[768];
+        int n;
+        while ((n = f.read(piece, sizeof piece)) > 0) {
+          reply("!data " + b64encode((const char *)piece, n));
+          feedWatch();
+        }
+        f.close();
+        reply("!end");
+        return;
+      }
+      String buf;  // a built-in file
       const char *p;
       size_t n;
       if (!store::view(arg, buf, p, n)) { reply("error: not found"); return; }
@@ -1371,6 +1398,7 @@ static void services() {
 void begin(bool safeMode) {
   safe = safeMode;
   applySettings();
+  if (!safe) appstoreBoot();
   scanApps();
   conOn = !safe && cget("usb_console") == "1" && usbdev::serialOn();
   String ssid = cget("wifi_ssid");
@@ -1517,6 +1545,7 @@ void key(const Key &k) {
     if (c == 'p') { screenshot(); return; }
     if (c == 'l') { if (cget("lock") != "0") overlay = OV_LOCK; return; }
     if (c == 'h') { if (overlay == OV_HELP) { overlay = OV_NONE; helpRows.clear(); } else openHelp(); return; }
+    if (c == '-' || c == '_' || c == '=' || c == '+') { volumeKey(c == '=' || c == '+' ? 1 : -1); return; }
   }
   if (dlg.kind != DLG_NONE) { dialogKey(k); return; }
   if (overlay == OV_QUICK) { quickKey(k); return; }

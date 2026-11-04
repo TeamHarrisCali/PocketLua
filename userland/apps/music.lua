@@ -324,6 +324,7 @@ function app.init(args)
 end
 
 function app.update(dt)
+  vol = tonumber(cfg.get("vol")) or vol  -- Fn+- / Fn+= change it from the shell too
   if view == "scan" then
     local st, n, msg = musiclib.scan_status()
     if st == "done" or st == "failed" then

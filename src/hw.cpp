@@ -645,6 +645,9 @@ void hwReleaseAudio() {
   micClose();
 }
 
+// Whether a recording or playback is running (the shell skips its beeps).
+bool hwAudioBusy() { return aMode != A_IDLE; }
+
 // Shared by snd.tone in bindings.cpp. False while recording: the speaker would
 // take the mic's pins and end the recording.
 bool hwUseSpeaker() {

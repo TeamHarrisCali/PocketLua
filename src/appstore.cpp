@@ -373,9 +373,13 @@ bool readCatalog(const std::function<void(Entry &)> &each, Firmware &fw) {
 
 String appPath(const String &name) { return "apps/" + name + "/main.lua"; }
 
-// installed | update | available, for an app or library entry
+// installed | update | available, for an app or library entry. System files
+// built into the firmware (Settings, the App Store, the editor, lib/settings)
+// update with the firmware, never as files: a card copy would hide the next
+// firmware's version.
 String status(const Entry &e) {
   String rel = e.kind == "app" ? appPath(e.name) : e.name;
+  if (store::embedded(rel)) return "installed";
   String have = localSha(rel);
   return !have.length() ? "available" : have == e.srcSha ? "installed" : "update";
 }
@@ -448,9 +452,16 @@ String result;  // what the last operation did, for the App Store app
 String restartInto;  // a firmware build that was just written: restart into it
 
 bool ready(String &err) {
+  // just after a restart Wi-Fi is still joining the network: give it 20 s
+  for (int i = 0; i < 200 && WiFi.getMode() != WIFI_OFF && WiFi.status() != WL_CONNECTED; i++) {
+    progress("Connecting to Wi-Fi...");
+    feedWatch();
+    delay(100);
+  }
   if (WiFi.status() != WL_CONNECTED) { err = "Wi-Fi isn't connected (Settings > Wi-Fi)"; return false; }
   for (int i = 0; i < 100 && time(nullptr) < 1700000000; i++) {  // the clock comes from the network
     progress("Waiting for the clock...");
+    feedWatch();
     delay(100);
   }
   if (time(nullptr) < 1700000000) { err = "the clock isn't set yet; try again in a moment"; return false; }
@@ -512,7 +523,7 @@ void apply(const String &ops) {
     if (what == "remove") { removes.push_back(name); continue; }
     if (what == "lib") { addLib(name); continue; }
     for (auto &e : cat) {
-      if (e.kind != "app" || e.name != name) continue;
+      if (e.kind != "app" || e.name != name || store::embedded(appPath(name))) continue;
       jobs.push_back({appPath(name), e.srcSize, e.srcSha});
       jobs.push_back({appPath(name) + "c", e.codeSize, e.codeSha});
       installs++;
@@ -583,6 +594,44 @@ void switchChannel(const String &to) {
   else result = "Now on " + String(to == "main" ? "Release" : "Beta") + "; everything was already the same";
 }
 
+// Whether the card's copy of a built-in file is byte for byte the built-in one.
+bool sameAsBuiltin(const String &rel, const EmbFile &e) {
+  File f = store::openStored(rel);
+  if (!f) return false;
+  bool same = f.size() == e.len;
+  uint8_t buf[256];
+  size_t at = 0;
+  int n;
+  while (same && (n = f.read(buf, sizeof buf)) > 0) {
+    same = memcmp(buf, e.data + at, n) == 0;
+    at += n;
+  }
+  f.close();
+  return same && at == e.len;
+}
+
+// At every boot: card copies of built-in system files hide the firmware's own
+// versions, so copies that an App Store or release install put there (a .lua
+// with its .luac) and copies identical to the built-in one are removed. A
+// file edited on the device differs and has no .luac (saving deletes it), so
+// it stays.
+void cleanSystemCopies() {
+  store::rescan();  // early in boot the card's file list may not be read yet
+  int n = 0;
+  for (size_t i = 0; i < EMBEDDED_COUNT; i++) {
+    String p = EMBEDDED[i].path;
+    if (!store::inStorage(p)) continue;
+    if (!store::inStorage(p + "c") && !sameAsBuiltin(p, EMBEDDED[i])) continue;
+    store::remove(p + "c");
+    store::remove(p);
+    n++;
+  }
+  if (n) {
+    store::rescan();
+    usbdev::log(String("system files: ") + n + " card copies removed, the firmware's own are used");
+  }
+}
+
 // ---------------------------------------------------------------- Lua
 String pendingOp, pendingArg;
 
@@ -642,12 +691,48 @@ int l_channel(lua_State *L) {
 
 }  // namespace
 
+// For the shell, at boot: drop card copies that hide system files.
+// Firmware updates and channel switches need the most memory (a 2.7 MB
+// download beside Wi-Fi and TLS), and after a while of use the heap is
+// fragmented. So they are saved and the device restarts first; this runs
+// them at boot, before any app has run. The saved request is cleared before
+// it runs, so a failure can't repeat at every boot.
+static bool bootRun = false;  // the pending operation came from a restart
+
+void appstoreBoot() {
+  cleanSystemCopies();
+  String saved = cfgGet("store_boot");
+  if (!saved.length()) return;
+  cfgSet("store_boot", "");
+  settingsFlush();
+  int bar = saved.indexOf('|');
+  pendingOp = bar < 0 ? saved : saved.substring(0, bar);
+  pendingArg = bar < 0 ? "" : saved.substring(bar + 1);
+  bootRun = true;
+  usbdev::log("store: running " + pendingOp + " " + pendingArg + " after the restart");
+}
+
+// Whether an operation should wait for a restart (see appstoreBoot).
+static bool needsRestart(const String &op, const String &arg) {
+  if (bootRun) return false;
+  return op == "switch" || (op == "apply" && ("," + arg + ",").indexOf(",firmware,") >= 0);
+}
+
 // For the shell: an operation the App Store asked for, run with no app open.
 bool appstorePending() { return pendingOp.length() > 0; }
 void appstoreRun() {
   String op = pendingOp, arg = pendingArg;
   pendingOp = pendingArg = "";
   result = "";
+  if (needsRestart(op, arg)) {
+    usbdev::log("store: " + op + " " + arg + " saved, restarting first to have the memory");
+    cfgSet("store_boot", op + "|" + arg);
+    settingsFlush();
+    progress("Restarting first to make room...", 0);
+    delay(1200);
+    ESP.restart();
+  }
+  bootRun = false;
   usbdev::log("store: " + op + " " + arg + " (channel " + channel() + ")");
   if (op == "check") check();
   else if (op == "apply") apply(arg);

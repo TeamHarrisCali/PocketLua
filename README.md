@@ -6,7 +6,7 @@ A live-editable OS for the M5Stack Cardputer ADV. The C++ core owns the hardware
 
 Flash it over USB with `pio run -t upload` (PlatformIO puts the running firmware into download mode by itself). This replaces whatever was on the device, M5Launcher included. The firmware is still a plain app image, so M5Launcher can also start `PocketLua.bin` from the SD card.
 
-After that, firmware updates come from the **App Store**: it writes the new build into the flash's spare app slot, checks it, and restarts into it. The new build is marked good after it has run for 10 s; if it crashes before that, the device goes back to the previous build and says so. Only a build newer than the running one is offered.
+After that, firmware updates come from the **App Store**: the device restarts first (so the download has the memory it needs), writes the new build into the flash's spare app slot, checks it, and restarts into it. Channel switches work the same way. The new build is marked good after it has run for 10 s; if it crashes before that, the device goes back to the previous build and says so. Only a build newer than the running one is offered.
 
 The firmware holds only the core: Settings, the App Store and the editor. Every other app comes from the **App Store**, which downloads from this repository's `release/` folder over HTTPS (BearSSL, checked against ISRG Root X1) with the store app closed, verifies each file's SHA-256, and keeps the previous copy. Nothing updates by itself: press C in the store to check, then choose.
 
@@ -19,7 +19,7 @@ There are two update channels, each a branch of this repository with its own `re
 - **Release** (`main`): the official builds.
 - **Beta** (`beta`): what comes next, to test before it goes to Release.
 
-A firmware is built for one channel and the App Store reads that channel. To change it, go to Settings > About > Updates. Joining Beta takes one confirmation; the device then installs the Beta firmware and the Beta version of every installed app, and restarts. Going back to Release is deliberately harder (you type `RELEASE`), because it installs the older Release firmware and apps, and data written by Beta apps may not work with them. Apps that exist only in Beta stay installed.
+A firmware is built for one channel and the App Store reads that channel. To change it, go to Settings > About > Updates. Joining Beta takes one confirmation; the device then installs the Beta firmware and the Beta version of every installed app, and restarts. Going back to Release warns first: it installs the older Release firmware and apps, and data written by Beta apps may not work with them. Apps that exist only in Beta stay installed.
 
 ## Publishing
 
@@ -53,6 +53,7 @@ Store-only apps (not built into the firmware) go in `store/apps/`.
 | Fn+N | Notification center |
 | Fn+P | Screenshot, saved as a BMP in `data/screenshots` |
 | Fn+L | Lock screen |
+| Fn+`-` / Fn+`=` | Volume down / up, from anywhere |
 | Hold `S` at boot | Safe mode (built-in system only) |
 
 **Home screen:** Tab switches category (All, System, Tools, Media, Games, Net), typing searches, Enter opens, Ctrl+E edits the app's source, and Ctrl+N creates a new app.
