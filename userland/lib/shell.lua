@@ -12,7 +12,7 @@ _G.shell = shell
 
 local DEFAULT_TZ = "PST8PDT,M3.2.0,M11.1.0"
 local MIN_FREE_TO_OPEN = 24 * 1024  -- refuse to open an app below this much free RAM
-local MIN_FREE_FOR_WIFI = 40 * 1024 -- Wi-Fi allocates roughly this when it starts
+local MIN_FREE_FOR_WIFI = 100 * 1024 -- Wi-Fi takes ~60 KB; Lua needs ~40 KB left after it
 
 local current, current_name = nil, nil
 local modal = nil
@@ -587,10 +587,14 @@ end
 
 -- ---------------------------------------------------------------- boot
 shell.apply_settings()
-setup_console()
-shell.dev_restart()
-local ssid = cfg.get("wifi_ssid")
-if ssid and cfg.get("wifi_auto") ~= "0" then shell.wifi_start(ssid, cfg.get("wifi_pass") or "") end
+-- Safe mode starts nothing in the background, so a setting that crashes the
+-- system (e.g. Wi-Fi without enough memory) can always be turned off.
+if not sys.safe_mode then
+  setup_console()
+  shell.dev_restart()
+  local ssid = cfg.get("wifi_ssid")
+  if ssid and cfg.get("wifi_auto") ~= "0" then shell.wifi_start(ssid, cfg.get("wifi_pass") or "") end
+end
 shell.home()
 shell.sound("boot")
 
