@@ -26,8 +26,10 @@ local function channel_row()
         sys.log("updates: leave beta " .. (yes and "yes" or "no"))
         if not yes then return end
         shell.prompt("Type RELEASE to confirm", "", function(text)
-          local ok = text and text:upper():gsub("%s", "") == "RELEASE"
-          sys.log("updates: typed " .. (ok and "RELEASE" or text and "something else" or "nothing (cancelled)"))
+          -- the word anywhere: a key still held from the Y can add a stray letter
+          local ok = text and text:upper():gsub("%s", ""):find("RELEASE", 1, true) ~= nil
+          sys.log("updates: typed " .. (text and string.format("%q", text:sub(1, 24)) or "nothing (cancelled)") ..
+            (ok and ": switching to Release" or ""))
           if ok then as.run("switch", "main")
           elseif text then shell.toast("Still on Beta (type RELEASE)", 3) end
         end)

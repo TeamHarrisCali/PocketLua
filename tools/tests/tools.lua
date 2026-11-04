@@ -373,8 +373,8 @@ key("y")
 check(shows("Type RELEASE"), "channel: then asks for RELEASE to be typed")
 type_text("nope"); key("enter")
 check(lastrun() == "" and shows("Still on Beta"), "channel: anything else keeps Beta")
-key("enter"); key("y"); type_text("release"); key("enter")
-check(lastrun() == "switch main", "channel: typing RELEASE switches to Release")
+key("enter"); key("y"); type_text("yRELEASE"); key("enter")
+check(lastrun() == "switch main", "channel: typing RELEASE switches to Release (a stray held key is fine)")
 shell.home(); frames(2)
 AS.runs = {}
 AS.channel = "main"
