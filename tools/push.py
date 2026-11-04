@@ -19,9 +19,13 @@ def open_port(path):
     attrs[4] = attrs[5] = termios.B115200
     attrs[6][termios.VMIN], attrs[6][termios.VTIME] = 0, 1
     termios.tcsetattr(fd, termios.TCSANOW, attrs)
-    # the device only talks once DTR and RTS are both up
-    fcntl.ioctl(fd, termios.TIOCMBIS, struct.pack("I", termios.TIOCM_DTR | termios.TIOCM_RTS))
-    time.sleep(0.2)
+    # the device only talks once DTR and RTS are both up; drop and raise them
+    # so it sees a fresh connection (as monitor.py does)
+    bits = struct.pack("I", termios.TIOCM_DTR | termios.TIOCM_RTS)
+    fcntl.ioctl(fd, termios.TIOCMBIC, bits)
+    time.sleep(0.3)
+    fcntl.ioctl(fd, termios.TIOCMBIS, bits)
+    time.sleep(0.3)
     termios.tcflush(fd, termios.TCIFLUSH)
     return fd
 

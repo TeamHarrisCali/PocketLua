@@ -378,6 +378,23 @@ static bool appFn(const char *fn) {
   return false;
 }
 
+// Focus mode: an app that needs the RAM and CPU (the music player) turns off
+// background services while it is open. Wi-Fi (and with it NTP and roaming)
+// comes back when the app closes, however it closes.
+static bool wifiStartSvc(const String &ssid, const String &pass, bool quiet);
+static bool focusWifi = false;
+static void focus(bool on) {
+  if (on && !focusWifi && WiFi.getMode() != WIFI_OFF) {
+    wifiEnable(false);
+    focusWifi = true;
+    usbdev::log("focus mode: wifi off");
+  } else if (!on && focusWifi) {
+    focusWifi = false;
+    wifiStartSvc(cget("wifi_ssid"), cget("wifi_pass"), true);
+    usbdev::log("focus mode ended: wifi back on");
+  }
+}
+
 static void closeApp(bool save) {
   if (!vm::L) return;
   lua_State *L = vm::L;
@@ -405,6 +422,7 @@ static void closeApp(bool save) {
   appHold = holdNow = false;
   g_displayHold = false;
   appsDirty = true;  // the app may have installed or edited apps
+  focus(false);      // after vm::close(), so Wi-Fi gets the freed RAM
 }
 
 static void fail(const String &msg) {
@@ -1353,7 +1371,7 @@ static int l_open_file(lua_State *L) {
   int dot = p.lastIndexOf('.');
   String ext = dot >= 0 ? p.substring(dot + 1) : "";
   ext.toLowerCase();
-  pendingApp = ext == "wav" ? "music" : (ext == "bmp" || ext == "jpg" || ext == "jpeg" || ext == "png") ? "images" : "edit";
+  pendingApp = (ext == "wav" || ext == "mp3") ? "music" : (ext == "bmp" || ext == "jpg" || ext == "jpeg" || ext == "png") ? "images" : "edit";
   pendingPath = p;
   pendingLine = 0;
   return 0;
@@ -1377,6 +1395,7 @@ static int l_format_time(lua_State *L) {
 static int l_tz(lua_State *L) { lua_pushstring(L, tz().c_str()); return 1; }
 static int l_wifi_start(lua_State *L) { lua_pushboolean(L, wifiStartSvc(OS(L, 1), OS(L, 2), false)); return 1; }
 static int l_wifi_stop(lua_State *L) { wifiEnable(false); return 0; }
+static int l_focus(lua_State *L) { focus(lua_toboolean(L, 1)); return 0; }
 static int l_start_timer(lua_State *L) {
   Timer &t = startTimer((float)luaL_checknumber(L, 1), lua_isstring(L, 2) ? lua_tostring(L, 2) : "Timer");
   if (lua_istable(L, 3)) {
@@ -1479,7 +1498,7 @@ static int l_index(lua_State *L) {
     lua_newtable(L);
     const char *edit[] = {"lua", "txt", "md", "csv", "json", "cfg", "conf", "ini", "log"};
     for (auto e : edit) { lua_pushstring(L, "edit"); lua_setfield(L, -2, e); }
-    lua_pushstring(L, "music"); lua_setfield(L, -2, "wav");
+    for (auto e : {"wav", "mp3"}) { lua_pushstring(L, "music"); lua_setfield(L, -2, e); }
     for (auto e : {"bmp", "jpg", "jpeg", "png"}) { lua_pushstring(L, "images"); lua_setfield(L, -2, e); }
     return 1;
   }
@@ -1496,7 +1515,7 @@ void registerLua(lua_State *L) {
       {"toast", l_toast}, {"alert", l_alert}, {"confirm", l_confirm}, {"prompt", l_prompt}, {"menu", l_menu},
       {"notify", l_notify}, {"sound", l_sound}, {"launch", l_launch}, {"edit", l_edit}, {"home", l_home},
       {"back", l_back}, {"open_file", l_open_file}, {"run_file", l_run_file}, {"app", l_app},
-      {"format_time", l_format_time}, {"tz", l_tz}, {"wifi_start", l_wifi_start}, {"wifi_stop", l_wifi_stop},
+      {"format_time", l_format_time}, {"tz", l_tz}, {"wifi_start", l_wifi_start}, {"wifi_stop", l_wifi_stop}, {"focus", l_focus},
       {"start_timer", l_start_timer}, {"cancel_timer", l_cancel_timer}, {"free_memory", l_free_memory},
       {"screenshot", l_screenshot}, {"sleep_after", l_sleep_after}, {"lock", l_lock}, {"wake", l_wake},
       {"apply_settings", l_apply_settings}, {"overlay", l_overlay}, {"close_overlay", l_close_overlay},

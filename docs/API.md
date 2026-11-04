@@ -68,7 +68,7 @@ Use the `ui.*` toolkit (see `docs/UI.md`) rather than raw drawing where possible
 | `snd.tone(freq, ms)`, `snd.stop()`, `snd.volume(0-255)` | Simple tones; a new tone replaces the current one; the volume also applies to `audio.play` |
 | `shell.sound(kind)` | System sounds: "notify", "error", "alarm", "boot", "low" |
 | `audio.record(path[, rate=16000])` | Record WAV to a file. Returns true/false |
-| `audio.play(path)` | Play a 16-bit PCM WAV. Returns true, or false and a reason |
+| `audio.play(path)` | Play an MP3 or a 16-bit PCM WAV (MP3 is mixed to mono and needs about 47 KB of RAM: use `shell.focus(true)`). Returns true, or false and a reason |
 | `audio.stop()` | Stop recording or playback |
 | `audio.status()` | "idle", "recording" or "playing"; seconds done; seconds total |
 | `audio.analyze()` | Listens for ~32 ms: level and peak (linear, 0-1 of full scale), pitch in Hz (0 = none), and 8 band amplitudes (0-1) centred on 100, 180, 320, 560, 1000, 1700, 2800 and 4000 Hz |
@@ -95,6 +95,7 @@ The mic and speaker cannot run at the same time; the drivers switch between them
 | `wifi.status()` | "off", "idle", "connecting", "connected" or "failed" |
 | `wifi.scan_start()`, `wifi.scan_result()` | Scan; results are `{ssid, rssi, secure, channel, bssid}`, or nil while scanning |
 | `shell.wifi_start([ssid, pass])` | Turn Wi-Fi on. It checks memory first and reports problems |
+| `shell.focus(true)` | Focus mode: turn Wi-Fi (and NTP and roaming) off while this app is open, to free RAM and CPU. It comes back on when the app closes |
 | `http.get(url[, max_bytes=8192])` | Body and status, or nil and an error. Plain http only |
 | `http.download(url, path[, max])` | Streams straight to a file (no RAM copy): bytes, status, or nil and an error |
 | `http.dns(host)`, `http.ping(host[, port])` | IP address; TCP connect time in ms |

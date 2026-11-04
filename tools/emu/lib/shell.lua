@@ -396,6 +396,10 @@ function shell.wifi_stop()
   collectgarbage("collect")
 end
 
+-- Native focus mode (system.cpp): Wi-Fi off while the app is open.
+shell.focused = false
+function shell.focus(on) shell.focused = on and true or false end
+
 -- ---------------------------------------------------------------- background services
 local synced = false
 local warned_low = false

@@ -10,6 +10,14 @@
 #include <HTTPClient.h>
 #include <utility/PI4IOE5V6408_Class.hpp>
 #include <driver/i2s_std.h>
+// MP3 decoder: Layer III only, scalar code, and its ~15 KB scratch area on
+// the heap instead of the stack (see the MINIMP3_SCRATCH patch in minimp3.h).
+#define MINIMP3_IMPLEMENTATION
+#define MINIMP3_ONLY_MP3
+#define MINIMP3_NO_SIMD
+static void *mp3Scratch = nullptr;
+#define MINIMP3_SCRATCH mp3Scratch
+#include <minimp3.h>
 #include "hw.h"
 #include "storage.h"
 #include "usbdev.h"
@@ -201,6 +209,98 @@ static void playTask(void *) {
   vTaskDelete(nullptr);
 }
 
+// MP3 playback, mixed to mono (the ADV has one speaker and a mono DAC). About
+// 38 KB while playing, in five blocks so a fragmented heap can still fit it;
+// all of it is freed when playback ends.
+static const size_t MP3_IN = 4096, MP3_FRAME = 1152;
+static mp3dec_t *mDec = nullptr;
+static uint8_t *mIn = nullptr;
+static int16_t *mPcm = nullptr, *mOut = nullptr;  // mOut: 3 mono frames
+static int mInLen = 0;
+
+static void mp3Free() {
+  free(mDec); free(mp3Scratch); free(mIn); free(mPcm); free(mOut);
+  mDec = nullptr; mp3Scratch = nullptr; mIn = nullptr; mPcm = mOut = nullptr;
+}
+
+static bool mp3Alloc() {
+  mDec = (mp3dec_t *)malloc(sizeof(mp3dec_t));
+  mp3Scratch = malloc(sizeof(mp3dec_scratch_t));
+  mIn = (uint8_t *)malloc(MP3_IN);
+  mPcm = (int16_t *)malloc(MINIMP3_MAX_SAMPLES_PER_FRAME * 2);
+  mOut = (int16_t *)malloc(3 * MP3_FRAME * 2);
+  if (mDec && mp3Scratch && mIn && mPcm && mOut) { mp3dec_init(mDec); mInLen = 0; return true; }
+  mp3Free();
+  return false;
+}
+
+// Decodes the next frame into out as mono; returns the sample count, 0 at the end.
+static int mp3Next(int16_t *out, mp3dec_frame_info_t &info) {
+  while (true) {
+    if (mInLen < (int)MP3_IN / 2) {
+      int n = aFile.read(mIn + mInLen, MP3_IN - mInLen);
+      if (n > 0) mInLen += n;
+    }
+    if (!mInLen) return 0;
+    int s = mp3dec_decode_frame(mDec, mIn, mInLen, mPcm, &info);
+    int used = info.frame_bytes;
+    if (used > 0) {
+      mInLen -= used;
+      memmove(mIn, mIn + used, mInLen);
+    }
+    if (s > 0) {
+      if (info.channels == 2)
+        for (int i = 0; i < s; i++) out[i] = ((int)mPcm[2 * i] + mPcm[2 * i + 1]) / 2;
+      else
+        memcpy(out, mPcm, s * 2);
+      return s;
+    }
+    if (used == 0) return 0;  // no frame left (end of file, or junk)
+  }
+}
+
+static void mp3Task(void *) {
+  mp3dec_frame_info_t info;
+  int idx = 0;
+  while (!aStop) {
+    // three buffers: one playing, one queued, one being decoded
+    int16_t *o = mOut + idx * MP3_FRAME;
+    int n = mp3Next(o, info);
+    if (n <= 0) break;
+    while (M5Cardputer.Speaker.isPlaying(0) >= 2 && !aStop) vTaskDelay(1);
+    M5Cardputer.Speaker.playRaw(o, n, info.hz, false, 1, 0);
+    aSamples = aSamples + n;
+    spkLastUse = millis();
+    idx = (idx + 1) % 3;
+  }
+  if (aStop) M5Cardputer.Speaker.stop(0);
+  while (M5Cardputer.Speaker.isPlaying(0)) vTaskDelay(2);
+  aFile.close();
+  mp3Free();
+  store::pin(false);
+  aMode = A_IDLE;
+  aTask = nullptr;
+  vTaskDelete(nullptr);
+}
+
+// Opens aFile (already open) as MP3 and starts playback. Returns an error or "".
+static const char *mp3Start() {
+  uint8_t h[10];
+  size_t start = 0;  // skip an ID3v2 tag: it can hold cover art
+  if (aFile.read(h, 10) == 10 && !memcmp(h, "ID3", 3))
+    start = 10 + ((h[6] & 0x7F) << 21 | (h[7] & 0x7F) << 14 | (h[8] & 0x7F) << 7 | (h[9] & 0x7F)) + (h[5] & 0x10 ? 10 : 0);
+  aFile.seek(start);
+  if (!mp3Alloc()) return "not enough memory for MP3";
+  mInLen = aFile.read(mIn, MP3_IN);
+  mp3dec_frame_info_t info;
+  if (mInLen <= 0 || mp3dec_decode_frame(mDec, mIn, mInLen, nullptr, &info) <= 0) { mp3Free(); return "no MP3 audio found"; }
+  mp3dec_init(mDec);  // the probe above only read the header
+  aRate = info.hz;
+  // length from the first frame's bitrate: exact for constant bitrate, close for VBR
+  aTotal = info.bitrate_kbps ? (uint64_t)(aFile.size() - start) * info.hz / (info.bitrate_kbps * 125) : 0;
+  return "";
+}
+
 static int au_record(lua_State *L) {
   if (aMode != A_IDLE) return luaL_error(L, "audio busy");
   String real;
@@ -226,12 +326,26 @@ static int au_record(lua_State *L) {
   return 1;
 }
 
-// Plays a 16-bit PCM WAV file. Returns true, or false + reason.
+// Plays an MP3 or 16-bit PCM WAV file. Returns true, or false + reason.
 static int au_play(lua_State *L) {
   if (aMode != A_IDLE) return luaL_error(L, "audio busy");
   String real;
   fs::FS *fs = store::resolve(str(L, 1), real);
   if (!fs || !(aFile = fs->open(real, "r"))) { lua_pushboolean(L, 0); lua_pushstring(L, "cannot open"); return 2; }
+  String lower = real;
+  lower.toLowerCase();
+  if (lower.endsWith(".mp3")) {
+    const char *why = mp3Start();
+    if (*why) { aFile.close(); lua_pushboolean(L, 0); lua_pushstring(L, why); return 2; }
+    aSamples = 0;
+    store::pin(true);
+    useSpeaker();
+    aStop = false;
+    aMode = A_PLAY;
+    xTaskCreatePinnedToCore(mp3Task, "mp3", 8192, nullptr, 3, &aTask, 0);
+    lua_pushboolean(L, 1);
+    return 1;
+  }
   uint8_t h[12];
   if (aFile.read(h, 12) != 12 || memcmp(h, "RIFF", 4) || memcmp(h + 8, "WAVE", 4)) {
     aFile.close(); lua_pushboolean(L, 0); lua_pushstring(L, "not a WAV file"); return 2;

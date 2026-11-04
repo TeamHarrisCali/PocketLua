@@ -1,5 +1,7 @@
--- Music: play WAV files from sd:/music and your recordings. Opens .wav files
--- from Files too. Enter plays/stops, left/right skip, - and = set the volume.
+-- Music: play MP3 and WAV files from data/music and your recordings. Opens
+-- .mp3 and .wav files from Files too. Enter plays/stops, left/right skip,
+-- - and = set the volume. Wi-Fi is off while Music is open (focus mode): the
+-- MP3 decoder needs that RAM. It comes back on when Music closes.
 local col = ui.col
 
 local app = { title = "Music", icon = "music", color = "pink", order = 41, category = "media" }
@@ -24,7 +26,8 @@ local function base(p) return p:match("([^/]+)$") or p end
 local function add_dir(d, tag)
   local found = {}
   for _, e in ipairs(sys.list(d) or {}) do
-    if not e.dir and e.name:lower():match("%.wav$") then found[#found + 1] = e.name end
+    local lower = e.name:lower()
+    if not e.dir and (lower:match("%.mp3$") or lower:match("%.wav$")) then found[#found + 1] = e.name end
   end
   table.sort(found)
   for _, n in ipairs(found) do
@@ -80,6 +83,7 @@ end
 
 function app.init(args)
   sel, top, cur, playing = 1, 1, nil, false
+  shell.focus(true)
   vol = tonumber(cfg.get("vol")) or 100
   local i = scan(args and args.path)
   if i then sel = i; play(i) end
@@ -101,7 +105,7 @@ end
 
 function app.draw()
   if #tracks == 0 then
-    ui.empty("music", "No music found", sd and "Put WAV files in sd:/music" or "Insert an SD card with /music")
+    ui.empty("music", "No music found", sd and "Put MP3 or WAV files in /liveos/data/music" or "Insert an SD card")
     ui.footer({ { "Esc", "Home" } })
     return
   end
