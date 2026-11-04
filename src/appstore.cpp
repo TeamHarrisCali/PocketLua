@@ -11,7 +11,9 @@
 #include <Arduino.h>
 #include <M5Cardputer.h>
 #include <WiFi.h>
+#include <errno.h>
 #include <esp_random.h>
+#include <lwip/sockets.h>
 #include <time.h>
 #include <functional>
 #include <vector>
@@ -64,21 +66,34 @@ unsigned char *iobuf = nullptr;
 WiFiClient tcp;
 bool up = false;
 
+// Reads the socket directly. WiFiClient::connected() decides from errno, which
+// may be left over from an unrelated call, so it could say "closed" whenever no
+// data had arrived yet: downloads stopped part way and handshakes failed
+// (BearSSL error 31). recv() itself tells the cases apart: data, none yet
+// (EWOULDBLOCK), or closed (0).
 int sockRead(void *ctx, unsigned char *buf, size_t len) {
   WiFiClient *c = (WiFiClient *)ctx;
   uint32_t t0 = millis();
   while (millis() - t0 < 10000) {
-    int avail = c->available();
-    if (avail > 0) {
-      int n = c->read(buf, len < (size_t)avail ? len : (size_t)avail);
-      if (n > 0) return n;
-    } else if (!c->connected()) {
-      return -1;
-    }
+    int fd = c->fd();
+    if (fd < 0) return -1;
+    errno = 0;
+    int n = recv(fd, buf, len, MSG_DONTWAIT);
+    if (n > 0) return n;
+    if (n == 0 || (errno != EWOULDBLOCK && errno != EAGAIN)) return -1;
     feedWatch();
     delay(2);
   }
   return -1;
+}
+// Whether a kept-alive connection is still open (GitHub closes idle ones).
+bool alive(WiFiClient &c) {
+  int fd = c.fd();
+  if (fd < 0) return false;
+  uint8_t b;
+  errno = 0;
+  int n = recv(fd, &b, 1, MSG_PEEK | MSG_DONTWAIT);
+  return n < 0 && (errno == EWOULDBLOCK || errno == EAGAIN);
 }
 int sockWrite(void *ctx, const unsigned char *buf, size_t len) {
   WiFiClient *c = (WiFiClient *)ctx;
@@ -86,7 +101,7 @@ int sockWrite(void *ctx, const unsigned char *buf, size_t len) {
   while (millis() - t0 < 10000) {
     size_t n = c->write(buf, len);
     if (n > 0) return (int)n;
-    if (!c->connected()) return -1;
+    if (c->fd() < 0) return -1;
     delay(5);
   }
   return -1;
@@ -132,7 +147,7 @@ int get(const String &path, const std::function<bool(const uint8_t *, size_t)> &
   String req = "GET " + String(REPO) + channel() + "/release/" + path + " HTTP/1.1\r\nHost: " + HOST +
                "\r\nUser-Agent: PocketLua\r\nConnection: keep-alive\r\n\r\n";
   for (int attempt = 0; attempt < 2; attempt++) {
-    bool fresh = !up || !tcp.connected();
+    bool fresh = !up || !alive(tcp);
     if (fresh && !openConn(err)) return -1;
     uint32_t t0 = millis();
     if (br_sslio_write_all(&tls->io, req.c_str(), req.length()) < 0 || br_sslio_flush(&tls->io) < 0) {
@@ -178,6 +193,7 @@ int get(const String &path, const std::function<bool(const uint8_t *, size_t)> &
         if (!chunked) {
           size_t take = n - i;
           if (length >= 0 && (long)take > length) take = length;
+          if (!take) break;  // more than Content-Length: ignore the rest
           if (!stopped && status == 200 && !sink(buf + i, take)) stopped = true;
           if (length >= 0) length -= take;
           i += take;
@@ -252,35 +268,40 @@ bool download(const String &rel, long size, const String &sha, String &err, int 
   String real;
   fs::FS *fs = store::resolve(rel, real, true);
   if (!fs) { err = "no storage"; return false; }
-  File f = fs->open(real + ".part", "w");
-  if (!f) { err = "can't write " + rel; return false; }
-  br_sha256_context c;
-  br_sha256_init(&c);
-  long got = 0;
-  uint32_t shown = 0;
-  int st = get(rel, [&](const uint8_t *p, size_t n) {
-    br_sha256_update(&c, p, n);
-    got += n;
-    if (millis() - shown > 300) {  // big files (the firmware): show the bytes
-      shown = millis();
-      progress(rel + "  " + String(got / 1024) + " / " + String(size / 1024) + " KB", pct);
+  for (int attempt = 0; attempt < 2; attempt++) {  // again once if the connection drops
+    File f = fs->open(real + ".part", "w");
+    if (!f) { err = "can't write " + rel; return false; }
+    br_sha256_context c;
+    br_sha256_init(&c);
+    long got = 0;
+    uint32_t shown = 0;
+    int st = get(rel, [&](const uint8_t *p, size_t n) {
+      br_sha256_update(&c, p, n);
+      got += n;
+      if (millis() - shown > 300) {  // big files (the firmware): show the bytes
+        shown = millis();
+        progress(rel + "  " + String(got / 1024) + " / " + String(size / 1024) + " KB", pct);
+      }
+      return f.write(p, n) == n;
+    }, err);
+    f.close();
+    uint8_t out[32];
+    br_sha256_out(&c, out);
+    if (st == 200 && got == size && hex(out, 32) == sha) {
+      if (fs->exists(real)) {
+        fs->remove(real + ".bak");
+        fs->rename(real, real + ".bak");
+      }
+      return fs->rename(real + ".part", real);
     }
-    return f.write(p, n) == n;
-  }, err);
-  f.close();
-  uint8_t out[32];
-  br_sha256_out(&c, out);
-  if (st != 200 || got != size || hex(out, 32) != sha) {
     fs->remove(real + ".part");
-    if (st > 0 && st != 200) err = rel + ": GitHub answered " + String(st);
-    else if (st == 200) err = rel + ": download didn't match its checksum";
-    return false;
+    if (st > 0 && st != 200) { err = rel + ": GitHub answered " + String(st); return false; }
+    if (st == 200 && got == size) { err = rel + ": download didn't match its checksum"; return false; }
+    if (st == 200) err = rel + ": connection dropped";
+    usbdev::log("store: " + rel + " got " + String(got) + " of " + String(size) + " bytes, " +
+                (attempt ? "giving up" : "trying again"));
   }
-  if (fs->exists(real)) {
-    fs->remove(real + ".bak");
-    fs->rename(real, real + ".bak");
-  }
-  return fs->rename(real + ".part", real);
+  return false;
 }
 
 // ---------------------------------------------------------------- catalog
