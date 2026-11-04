@@ -49,6 +49,39 @@ static void micClose() {
   M5.In_I2C.writeRegister8(ES8311, 0x0D, 0xFC, 400000);  // power down the analog side
 }
 
+static int micSlot = -1;  // 0 = left, 1 = right, -1 = average both
+
+// Reads n mono samples at micRate.
+static bool micRead(int16_t *out, size_t n) {
+  int16_t in[256];  // 64 output samples per read
+  while (n) {
+    size_t want = n < 64 ? n : 64, got = 0;
+    if (i2s_channel_read(micRx, in, want * 8, &got, 500) != ESP_OK || got < want * 8) return false;
+    for (size_t i = 0; i < want; i++) {
+      const int16_t *f = in + i * 4;  // L R L R
+      *out++ = micSlot < 0 ? ((int)f[0] + f[1] + f[2] + f[3]) / 4 : ((int)f[micSlot] + f[2 + micSlot]) / 2;
+    }
+    n -= want;
+  }
+  micLastUse = millis();
+  return true;
+}
+
+// Drops the codec's start-up transient (~150 ms), then listens for ~60 ms to
+// see which slot carries the mic.
+static void micPickSlot() {
+  int16_t in[256];
+  size_t got;
+  for (int i = 0; i < 75; i++) i2s_channel_read(micRx, in, sizeof(in), &got, 500);
+  uint32_t l = 0, r = 0;
+  for (int i = 0; i < 30; i++) {
+    if (i2s_channel_read(micRx, in, sizeof(in), &got, 500) != ESP_OK) break;
+    for (size_t k = 0; k + 1 < got / 2; k += 2) { l += abs(in[k]); r += abs(in[k + 1]); }
+  }
+  micSlot = l > 4 * r ? 0 : r > 4 * l ? 1 : -1;
+  usbdev::log(String("mic slots L=") + l + " R=" + r);
+}
+
 static void useSpeaker() {
   micClose();
   if (!M5Cardputer.Speaker.isRunning()) M5Cardputer.Speaker.begin();
@@ -61,6 +94,11 @@ static bool useMic(uint32_t rate) {
   if (M5Cardputer.Speaker.isRunning()) M5Cardputer.Speaker.end();
   if (M5Cardputer.Mic.isRunning()) M5Cardputer.Mic.end();
   micClose();
+  // Silence the speaker path first (DAC volume, output driver, DAC power):
+  // resetting the codec while it is live pops. Speaker.begin() turns it back on.
+  static const uint8_t quiet[][2] = {{0x32, 0x00}, {0x13, 0x00}, {0x12, 0x02}};
+  for (auto &r : quiet) M5.In_I2C.writeRegister8(ES8311, r[0], r[1], 400000);
+  delay(5);
   for (int p : {41, 42, 43, 46}) gpio_reset_pin((gpio_num_t)p);
 
   M5.In_I2C.writeRegister8(ES8311, 0x00, 0x1F, 400000);  // reset
@@ -75,10 +113,11 @@ static bool useMic(uint32_t rate) {
   for (auto &r : regs) M5.In_I2C.writeRegister8(ES8311, r[0], r[1], 400000);
   uint8_t id = M5.In_I2C.readRegister8(ES8311, 0xFD, 400000);
 
-  // Stereo frames at twice the rate; micRead() sums both slots and averages
-  // pairs, so it works whichever slot the codec puts the ADC on.
+  // Stereo frames at twice the rate; micRead() averages pairs and uses the
+  // slot the codec puts the ADC on (picked below). 8 KB of DMA = 64 ms, so a
+  // slow SD write while recording doesn't drop samples.
   i2s_chan_config_t cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
-  cc.dma_desc_num = 4;
+  cc.dma_desc_num = 8;
   cc.dma_frame_num = 256;
   i2s_std_config_t sc = {
       .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(rate * 2),
@@ -89,24 +128,10 @@ static bool useMic(uint32_t rate) {
   if (ok) ok = i2s_channel_init_std_mode(micRx, &sc) == ESP_OK && i2s_channel_enable(micRx) == ESP_OK;
   if (!ok && micRx) { i2s_del_channel(micRx); micRx = nullptr; }
   if (ok) micRate = rate;
-  usbdev::log(String("mic begin ") + (ok ? "ok" : "FAILED") + " rate=" + rate + " codec id=0x" + String(id, HEX));
+  if (ok) micPickSlot();
+  usbdev::log(String("mic begin ") + (ok ? "ok" : "FAILED") + " rate=" + rate + " codec id=0x" + String(id, HEX) +
+              " slot=" + (micSlot < 0 ? "both" : micSlot ? "R" : "L"));
   return ok;
-}
-
-// Reads n mono samples at micRate.
-static bool micRead(int16_t *out, size_t n) {
-  int16_t in[256];  // 64 output samples per read
-  while (n) {
-    size_t want = n < 64 ? n : 64, got = 0;
-    if (i2s_channel_read(micRx, in, want * 8, &got, 500) != ESP_OK || got < want * 8) return false;
-    for (size_t i = 0; i < want; i++) {
-      int v = ((int)in[i * 4] + in[i * 4 + 1] + in[i * 4 + 2] + in[i * 4 + 3]) / 2;
-      *out++ = v > 32767 ? 32767 : v < -32768 ? -32768 : v;
-    }
-    n -= want;
-  }
-  micLastUse = millis();
-  return true;
 }
 
 static void wavHeader(uint8_t *h, uint32_t rate, uint32_t dataBytes) {
@@ -154,9 +179,11 @@ static void playTask(void *) {
   if (buf[0] && buf[1]) {
     int idx = 0;
     while (!aStop) {
+      // playRaw() plays from our buffer without copying it, so wait until
+      // buf[idx] has finished playing before reading the next block into it.
+      while (M5Cardputer.Speaker.isPlaying(0) >= 2 && !aStop) vTaskDelay(1);
       int n = aFile.read((uint8_t *)buf[idx], ABUF * 2);
       if (n <= 0) break;
-      while (M5Cardputer.Speaker.isPlaying(0) >= 2 && !aStop) vTaskDelay(1);
       M5Cardputer.Speaker.playRaw(buf[idx], n / 2, aRate, aStereo, 1, 0);
       aSamples = aSamples + n / 2 / (aStereo ? 2 : 1);
       spkLastUse = millis();
