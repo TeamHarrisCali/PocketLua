@@ -6,7 +6,7 @@ A live-editable OS for the M5Stack Cardputer ADV. The C++ core owns the hardware
 
 Flash it over USB with `pio run -t upload` (PlatformIO puts the running firmware into download mode by itself). This replaces whatever was on the device, M5Launcher included. The firmware is still a plain app image, so M5Launcher can also start `PocketLua.bin` from the SD card.
 
-After that, firmware updates come from the **App Store**: it writes the new build into the flash's spare app slot, checks it, and restarts into it. The new build is marked good after it has run for 10 s; if it crashes before that, the device goes back to the previous build and says so. Only a build newer than the running one is offered.
+After that, firmware updates come from the **App Store**: the device restarts first (so the download has the memory it needs), writes the new build into the flash's spare app slot, checks it, and restarts into it. Channel switches work the same way. The new build is marked good after it has run for 10 s; if it crashes before that, the device goes back to the previous build and says so. Only a build newer than the running one is offered.
 
 The firmware holds only the core: Settings, the App Store and the editor. Every other app comes from the **App Store**, which downloads from this repository's `release/` folder over HTTPS (BearSSL, checked against ISRG Root X1) with the store app closed, verifies each file's SHA-256, and keeps the previous copy. Nothing updates by itself: press C in the store to check, then choose.
 
