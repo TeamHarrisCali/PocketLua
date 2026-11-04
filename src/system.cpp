@@ -25,6 +25,8 @@ using ui::col;
 
 extern const char *volatile g_crumb;  // main.cpp: what the main loop is doing
 
+String tlsBench();  // tlsbench.cpp: crypto speed test (USB console !bench)
+
 namespace shell {
 
 // ================================================================ state
@@ -1169,6 +1171,7 @@ static void conLine(String line) {
       for (size_t i = 0; i < n; i += 768) reply("!data " + b64encode(p + i, min((size_t)768, n - i)));
       reply("!end");
     } else if (cmd == "fput") conPut(arg);
+    else if (cmd == "bench") { reply("benchmarking crypto (a few seconds)..."); reply(tlsBench()); }
     else if (cmd == "run") { launch(arg); reply("ok"); }
     else if (cmd == "ls") { for (auto &e : store::list(arg)) reply(String(e.dir ? "d " : "- ") + e.name); }
     else if (cmd == "log") {
