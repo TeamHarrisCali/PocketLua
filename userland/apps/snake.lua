@@ -1,6 +1,13 @@
 -- Snake: eat, grow, don't bite yourself. Arrows or W/A/S/D steer, P pauses.
 local col = ui.col
 local app = { title = "Snake", icon = "snake", color = "green", order = 60, category = "games" }
+app.help = {
+  { "Arrows", "Steer (starts game)" },
+  { "WASD", "Steer" },
+  { "P", "Pause" },
+  { "Enter", "Play again" },
+  { "Esc", "Home" },
+}
 
 local GW, GH, CELL = 38, 16, 6        -- grid 228 x 96 px
 local X0, Y0 = 6, 26                  -- grid origin (content y 26-121)

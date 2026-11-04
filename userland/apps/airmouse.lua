@@ -6,6 +6,18 @@
 local col = ui.col
 
 local app = { title = "Air Mouse", icon = "mouse", color = "purple", order = 34, category = "net" }
+app.help = {
+  { "Enter", "Left click" },
+  { "R", "Right click" },
+  { "Tab", "Drag on / off" },
+  { ";.", "Scroll wheel" },
+  { "-=", "Sensitivity" },
+  { "C", "Recalibrate" },
+  { "P", "Pause" },
+  { "A", "Cycle axes" },
+  { "S", "Swap axes" },
+  { "X/Y", "Invert X / Y" },
+}
 
 local AXES = { { "gz", "gx" }, { "gz", "gy" }, { "gx", "gy" } }  -- { sideways, up/down }
 local DEAD = 3        -- deg/s ignored (hand tremor and drift)

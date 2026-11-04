@@ -4,6 +4,12 @@
 -- least 0.3 s after the last one. Today's count is kept in cfg.
 local col = ui.col
 local app = { title = "Steps", icon = "steps", color = "teal", order = 53, category = "tools" }
+app.help = {
+  { "-=", "Goal -/+ 500" },
+  { "S", "Sensitivity" },
+  { "R", "Reset count" },
+  { "Esc", "Back" },
+}
 
 local MIN_GAP = 0.3                       -- seconds between steps (max ~3.3 steps/s)
 local SENS = { { "Low", 0.20 }, { "Med", 0.13 }, { "High", 0.08 } }  -- threshold in g

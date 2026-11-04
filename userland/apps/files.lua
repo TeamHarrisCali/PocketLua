@@ -2,6 +2,14 @@
 local col = ui.col
 
 local app = { title = "Files", icon = "folder", color = "teal", order = 2, category = "system" }
+app.help = {
+  { "Up/Dn", "Select" },
+  { "Enter", "Open file or folder" },
+  { "<>", "Parent / open" },
+  { "X", "Delete or revert" },
+  { "N", "New file" },
+  { "Esc", "Up a folder" },
+}
 
 local MAX_EDIT = 32 * 1024  -- matches the editor's limit
 

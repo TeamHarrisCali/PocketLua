@@ -4,6 +4,13 @@
 local col = ui.col
 
 local app = { title = "USB Keys", icon = "usb", color = "blue", order = 10, category = "net" }
+app.help = {
+  { "Up/Dn", "Select" },
+  { "Enter", "Type snippet / live" },
+  { "E", "Edit snippets" },
+  { "Any", "Live: sent to PC" },
+  { "Esc", "Stop live / home" },
+}
 
 local FILE = "data/snippets.txt"
 local DEFAULT = "Hello|Hello, world!\nSign-off|Best regards,\\nThe Cardputer\n"

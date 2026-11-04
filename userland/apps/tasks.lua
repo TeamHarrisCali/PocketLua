@@ -3,6 +3,11 @@
 local col = ui.col
 
 local app = { title = "Task Manager", icon = "tasks", color = "red", order = 4, category = "system" }
+app.help = {
+  { "Up/Dn", "Select" },
+  { "Enter", "Free memory / toggle" },
+  { "Esc", "Home" },
+}
 
 local rows, sel, top = {}, 1, 1
 local free, lua_kb, largest, total = 0, 0, 0, 1

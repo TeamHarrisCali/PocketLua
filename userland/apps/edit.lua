@@ -3,6 +3,17 @@
 local col = ui.col
 
 local app = { title = "Editor", icon = "pencil", color = "purple", hidden = true, category = "tools" }
+app.help = {
+  { "Arrows", "Move (Fn + ; . , /)" },
+  { "^S", "Save" },
+  { "^R", "Save and run" },
+  { "^Z", "Undo" },
+  { "^C/V", "Copy / paste line" },
+  { "^X/K", "Cut / delete line" },
+  { "^A/E", "Line start / end" },
+  { "^U/D", "Page up / down" },
+  { "Esc", "Exit; twice discards" },
+}
 
 local MAX_BYTES = 32 * 1024  -- one line costs ~30 bytes of overhead on top of its text
 local GUTTER = 24

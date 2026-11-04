@@ -2,6 +2,18 @@
 -- expression is read by a small parser here; typed text is never run as Lua.
 local col = ui.col
 local app = { title = "Calculator", icon = "calc", color = "purple", order = 22, category = "tools" }
+app.help = {
+  { "Enter", "Calculate" },
+  { "^D", "Deg / Rad" },
+  { "Tab", "Calc / Units" },
+  { "Esc", "Clear, then home" },
+  { "Up/Dn", "History (Calc)" },
+  { "Bksp", "Delete" },
+  { "Up/Dn", "Field (Units)" },
+  { "<>", "Change (Units)" },
+  { "S", "Swap (Units)" },
+  { "-", "+/- sign (Units)" },
+}
 
 local TABS = { "Calc", "Units" }
 local MAX_INPUT = 60

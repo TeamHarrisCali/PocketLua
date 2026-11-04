@@ -3,6 +3,13 @@
 -- contain the one-line header `local app = { title = "...", ... }`.
 local col = ui.col
 local app = { title = "App Store", icon = "store", color = "green", order = 24, category = "system" }
+app.help = {
+  { "Tab", "SD / Web / Installed" },
+  { "Up/Dn", "Select" },
+  { "Enter", "Install/get/open" },
+  { "X", "Uninstall (Installed)" },
+  { "Esc", "Home" },
+}
 
 local TABS = { "SD card", "Web", "Installed" }
 local SD_DIR = "data/install"  -- copy .lua apps to /liveos/data/install on the card

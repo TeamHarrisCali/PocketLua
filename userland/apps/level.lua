@@ -4,6 +4,11 @@
 local col = ui.col
 
 local app = { title = "Level", icon = "level", color = "green", order = 20, category = "tools" }
+app.help = {
+  { "C", "Zero here" },
+  { "F/G", "Flip X / Y" },
+  { "R", "Swap axes" },
+}
 
 local off_x, off_y = 0, 0
 local flip_x, flip_y, swap = 1, 1, false

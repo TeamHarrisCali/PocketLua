@@ -36,6 +36,9 @@ static TaskHandle_t aTask = nullptr;
 static File aFile;
 static uint32_t aRate = 16000;
 static volatile uint32_t aSamples = 0, aTotal = 0;
+static volatile bool aPaused = false;
+static volatile int32_t aSeekTo = -1;     // seconds; the playback task seeks when it sees it
+static size_t aDataStart = 0;             // where the audio starts in aFile (after headers/tags)
 static bool aStereo = false;
 static uint32_t spkLastUse = 0;
 static const size_t ABUF = 1024;  // samples per buffer
@@ -182,18 +185,36 @@ static void recTask(void *) {
   vTaskDelete(nullptr);
 }
 
+// While paused the playback task idles here. The speaker channel is cut at
+// once; a seek request or stop ends the wait.
+static void pausedWait() {
+  M5Cardputer.Speaker.stop(0);
+  while (aPaused && !aStop && aSeekTo < 0) vTaskDelay(20);
+}
+
 static void playTask(void *) {
   int16_t *buf[2] = {(int16_t *)malloc(ABUF * 2), (int16_t *)malloc(ABUF * 2)};
   if (buf[0] && buf[1]) {
     int idx = 0;
+    size_t frame = aStereo ? 4 : 2;
     while (!aStop) {
+      if (aSeekTo >= 0) {
+        uint32_t at = aSeekTo;
+        aSeekTo = -1;
+        if (at * aRate > aTotal) at = aTotal / aRate;
+        M5Cardputer.Speaker.stop(0);
+        aFile.seek(aDataStart + (size_t)at * aRate * frame);
+        aSamples = at * aRate;
+      }
+      if (aPaused) { pausedWait(); continue; }
       // playRaw() plays from our buffer without copying it, so wait until
       // buf[idx] has finished playing before reading the next block into it.
-      while (M5Cardputer.Speaker.isPlaying(0) >= 2 && !aStop) vTaskDelay(1);
+      while (M5Cardputer.Speaker.isPlaying(0) >= 2 && !aStop && !aPaused && aSeekTo < 0) vTaskDelay(1);
+      if (aStop || aPaused || aSeekTo >= 0) continue;
       int n = aFile.read((uint8_t *)buf[idx], ABUF * 2);
       if (n <= 0) break;
       M5Cardputer.Speaker.playRaw(buf[idx], n / 2, aRate, aStereo, 1, 0);
-      aSamples = aSamples + n / 2 / (aStereo ? 2 : 1);
+      aSamples = aSamples + n / frame;
       spkLastUse = millis();
       idx ^= 1;
     }
@@ -217,10 +238,12 @@ static mp3dec_t *mDec = nullptr;
 static uint8_t *mIn = nullptr;
 static int16_t *mPcm = nullptr, *mOut = nullptr;  // mOut: 3 mono frames
 static int mInLen = 0;
+static uint32_t mKbps = 0, mXingBytes = 0;
+static uint8_t *mToc = nullptr;  // Xing seek table (100 bytes), VBR files only
 
 static void mp3Free() {
-  free(mDec); free(mp3Scratch); free(mIn); free(mPcm); free(mOut);
-  mDec = nullptr; mp3Scratch = nullptr; mIn = nullptr; mPcm = mOut = nullptr;
+  free(mDec); free(mp3Scratch); free(mIn); free(mPcm); free(mOut); free(mToc);
+  mDec = nullptr; mp3Scratch = nullptr; mIn = nullptr; mPcm = mOut = nullptr; mToc = nullptr;
 }
 
 static bool mp3Alloc() {
@@ -259,15 +282,39 @@ static int mp3Next(int16_t *out, mp3dec_frame_info_t &info) {
   }
 }
 
+// Jumps to `sec` seconds: through the Xing table for VBR files, by bitrate
+// otherwise. The decoder resyncs on the next frame.
+static void mp3Seek(uint32_t sec) {
+  size_t bytes = aFile.size() - aDataStart, pos;
+  if (aTotal && (uint64_t)sec * aRate > aTotal) sec = aTotal / aRate;
+  if (mToc && aTotal) {
+    float pct = (float)sec * aRate * 100 / aTotal;
+    int i = pct >= 99 ? 99 : (int)pct;
+    float a = mToc[i], b = i < 99 ? mToc[i + 1] : 256;
+    pos = (size_t)((a + (b - a) * (pct - i)) / 256 * (mXingBytes ? mXingBytes : bytes));
+  } else {
+    pos = (size_t)sec * mKbps * 125;
+  }
+  if (pos >= bytes) pos = bytes ? bytes - 1 : 0;
+  M5Cardputer.Speaker.stop(0);
+  aFile.seek(aDataStart + pos);
+  mInLen = 0;
+  mp3dec_init(mDec);
+  aSamples = sec * aRate;
+}
+
 static void mp3Task(void *) {
   mp3dec_frame_info_t info;
   int idx = 0;
   while (!aStop) {
+    if (aSeekTo >= 0) { uint32_t at = aSeekTo; aSeekTo = -1; mp3Seek(at); }
+    if (aPaused) { pausedWait(); continue; }
     // three buffers: one playing, one queued, one being decoded
     int16_t *o = mOut + idx * MP3_FRAME;
     int n = mp3Next(o, info);
     if (n <= 0) break;
-    while (M5Cardputer.Speaker.isPlaying(0) >= 2 && !aStop) vTaskDelay(1);
+    while (M5Cardputer.Speaker.isPlaying(0) >= 2 && !aStop && !aPaused && aSeekTo < 0) vTaskDelay(1);
+    if (aStop || aSeekTo >= 0) continue;
     M5Cardputer.Speaker.playRaw(o, n, info.hz, false, 1, 0);
     aSamples = aSamples + n;
     spkLastUse = millis();
@@ -299,8 +346,28 @@ static const char *mp3Start() {
   if (mInLen <= 0 || mp3dec_decode_frame(mDec, mIn, mInLen, nullptr, &info) <= 0) { mp3Free(); return "no MP3 audio found"; }
   mp3dec_init(mDec);  // the probe above only read the header
   aRate = info.hz;
+  aDataStart = start;
+  mKbps = info.bitrate_kbps;
+  mXingBytes = 0;
   // length from the first frame's bitrate: exact for constant bitrate, close for VBR
-  aTotal = info.bitrate_kbps ? (uint64_t)(aFile.size() - start) * info.hz / (info.bitrate_kbps * 125) : 0;
+  aTotal = mKbps ? (uint64_t)(aFile.size() - start) * info.hz / (mKbps * 125) : 0;
+  // A Xing/Info frame (written by LAME and most encoders) gives the exact
+  // frame count, and for VBR a table for seeking.
+  const uint8_t *fr = mIn + info.frame_offset;
+  int span = info.frame_bytes - info.frame_offset;
+  if (span > 200) span = 200;
+  for (int i = 4; i + 8 <= span; i++) {
+    if (memcmp(fr + i, "Xing", 4) && memcmp(fr + i, "Info", 4)) continue;
+    auto be32 = [](const uint8_t *b) { return (uint32_t)b[0] << 24 | b[1] << 16 | b[2] << 8 | b[3]; };
+    uint32_t flags = be32(fr + i + 4);
+    const uint8_t *p = fr + i + 8;
+    int perFrame = ((fr[1] >> 3) & 3) == 3 ? 1152 : 576;  // MPEG-1 or MPEG-2/2.5
+    if (flags & 1) { aTotal = be32(p) * perFrame; p += 4; }
+    if (flags & 2) { mXingBytes = be32(p); p += 4; }
+    if ((flags & 4) && !memcmp(fr + i, "Xing", 4) && p + 100 <= fr + span + 100 && (mToc = (uint8_t *)malloc(100)))
+      memcpy(mToc, p, 100);
+    break;
+  }
   return "";
 }
 
@@ -349,6 +416,8 @@ static int au_play(lua_State *L) {
   if (!fs || !(aFile = fs->open(real, "r"))) { lua_pushboolean(L, 0); lua_pushstring(L, "cannot open"); return 2; }
   String lower = real;
   lower.toLowerCase();
+  aPaused = false;
+  aSeekTo = lua_isnumber(L, 2) && lua_tonumber(L, 2) > 0 ? (int32_t)lua_tonumber(L, 2) : -1;
   if (lower.endsWith(".mp3")) {
     const char *why = mp3Start();
     if (*why) { aFile.close(); lua_pushboolean(L, 0); lua_pushstring(L, why); return 2; }
@@ -380,6 +449,7 @@ static int au_play(lua_State *L) {
       if (len > 16) aFile.seek(aFile.position() + len - 16);
     } else if (!memcmp(c, "data", 4)) {
       dataLen = len;
+      aDataStart = aFile.position();
       break;
     } else {
       aFile.seek(aFile.position() + len);
@@ -405,12 +475,126 @@ static int au_stop(lua_State *L) {
   return 0;
 }
 
-// status() -> "idle"|"recording"|"playing", seconds done, seconds total
+// pause(on) pauses or resumes playback; returns whether it is paused.
+static int au_pause(lua_State *L) {
+  if (aMode == A_PLAY) aPaused = lua_toboolean(L, 1);
+  lua_pushboolean(L, aMode == A_PLAY && aPaused);
+  return 1;
+}
+
+// seek(seconds) jumps within the playing track.
+static int au_seek(lua_State *L) {
+  if (aMode == A_PLAY) aSeekTo = max(0, (int)luaL_checknumber(L, 1));
+  return 0;
+}
+
+// status() -> "idle"|"recording"|"playing"|"paused", seconds done, seconds total
 static int au_status(lua_State *L) {
-  lua_pushstring(L, aMode == A_REC ? "recording" : aMode == A_PLAY ? "playing" : "idle");
+  lua_pushstring(L, aMode == A_REC ? "recording" : aMode == A_PLAY ? (aPaused ? "paused" : "playing") : "idle");
   lua_pushnumber(L, (float)aSamples / aRate);
   lua_pushnumber(L, aMode == A_PLAY ? (float)aTotal / aRate : 0);
   return 3;
+}
+
+// ID3 text to plain ASCII: the UI font has no accented letters, so Latin-1
+// letters are folded (é -> e) and typographic quotes and dashes simplified.
+static void id3Put(String &out, uint32_t c) {
+  static const char fold[] = "AAAAAAACEEEEIIIIDNOOOOOxOUUUUYPsaaaaaaaceeeeiiiidnooooo/ouuuuypy";
+  if (!c) return;
+  if (c < 0x80) out += (char)c;
+  else if (c >= 0xC0 && c <= 0xFF) out += fold[c - 0xC0];
+  else if (c == 0x2018 || c == 0x2019) out += '\'';
+  else if (c == 0x201C || c == 0x201D) out += '"';
+  else if (c == 0x2013 || c == 0x2014) out += '-';
+  else if (c == 0x2026) out += "...";
+  else out += '?';
+}
+
+static String id3Text(const uint8_t *p, size_t n) {
+  String out;
+  if (!n) return out;
+  uint8_t enc = *p++;
+  n--;
+  if (enc == 1 || enc == 2) {  // UTF-16 (with a byte order mark) or UTF-16BE
+    bool be = enc == 2;
+    size_t i = 0;
+    if (enc == 1 && n >= 2 && ((p[0] == 0xFF && p[1] == 0xFE) || (p[0] == 0xFE && p[1] == 0xFF))) { be = p[0] == 0xFE; i = 2; }
+    for (; i + 1 < n; i += 2) {
+      uint32_t c = be ? (p[i] << 8 | p[i + 1]) : (p[i + 1] << 8 | p[i]);
+      if (!c) break;
+      if (c >= 0xD800 && c < 0xE000) { if (c < 0xDC00) id3Put(out, '?'); continue; }  // outside the BMP
+      id3Put(out, c);
+    }
+  } else if (enc == 3) {  // UTF-8
+    for (size_t i = 0; i < n && p[i];) {
+      uint32_t c = p[i];
+      int more = c < 0x80 ? 0 : c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : -1;
+      if (more < 0) { i++; continue; }
+      c &= more ? (0x3F >> more) : 0x7F;
+      i++;
+      for (int k = 0; k < more && i < n; k++, i++) c = c << 6 | (p[i] & 0x3F);
+      id3Put(out, c);
+    }
+  } else {  // ISO-8859-1
+    for (size_t i = 0; i < n && p[i]; i++) id3Put(out, p[i]);
+  }
+  out.trim();
+  return out;
+}
+
+// tags(path) -> {title, artist, album, track} from the ID3v2 tag (versions
+// 2.2-2.4) or an ID3v1 tag; fields that are missing are left out.
+static int au_tags(lua_State *L) {
+  String real;
+  fs::FS *fs = store::resolve(str(L, 1), real);
+  File f = fs ? fs->open(real, "r") : File();
+  lua_newtable(L);
+  if (!f) return 1;
+  int found = 0;
+  uint8_t h[10], buf[160];
+  auto syncsafe = [](const uint8_t *b) { return (uint32_t)(b[0] & 0x7F) << 21 | (b[1] & 0x7F) << 14 | (b[2] & 0x7F) << 7 | (b[3] & 0x7F); };
+  auto set = [&](const char *key, const String &v) {
+    if (!v.length()) return;
+    lua_pushstring(L, v.c_str());
+    lua_setfield(L, -2, key);
+    found++;
+  };
+  if (f.read(h, 10) == 10 && !memcmp(h, "ID3", 3) && h[3] >= 2 && h[3] <= 4) {
+    int ver = h[3], hdr = ver == 2 ? 6 : 10;
+    size_t end = 10 + syncsafe(h + 6), pos = 10;
+    if ((h[5] & 0x40) && ver >= 3 && f.read(buf, 4) == 4)  // extended header
+      pos = ver == 4 ? 10 + syncsafe(buf) : 14 + ((uint32_t)buf[0] << 24 | buf[1] << 16 | buf[2] << 8 | buf[3]);
+    while (pos + hdr <= end && found < 4) {
+      f.seek(pos);
+      if (f.read(buf, hdr) != hdr || !buf[0]) break;  // padding
+      uint32_t size = ver == 2 ? (buf[3] << 16 | buf[4] << 8 | buf[5])
+                    : ver == 4 ? syncsafe(buf + 4) : ((uint32_t)buf[4] << 24 | buf[5] << 16 | buf[6] << 8 | buf[7]);
+      char id[5] = {0};
+      memcpy(id, buf, ver == 2 ? 3 : 4);
+      const char *key = !strcmp(id, "TIT2") || !strcmp(id, "TT2") ? "title"
+                      : !strcmp(id, "TPE1") || !strcmp(id, "TP1") ? "artist"
+                      : !strcmp(id, "TALB") || !strcmp(id, "TAL") ? "album"
+                      : !strcmp(id, "TRCK") || !strcmp(id, "TRK") ? "track" : nullptr;
+      if (key && size > 1) {
+        size_t n = size < sizeof buf ? size : sizeof buf;
+        if (f.read(buf, n) == n) set(key, id3Text(buf, n));
+      }
+      pos += hdr + size;
+    }
+  }
+  if (!found && f.size() > 128 && f.seek(f.size() - 128) && f.read(buf, 128) == 128 && !memcmp(buf, "TAG", 3)) {
+    auto field = [&](int at, int len) {  // ID3v1: fixed-width Latin-1 fields
+      uint8_t t[32] = {0};
+      memcpy(t + 1, buf + at, len);
+      return id3Text(t, len + 1);
+    };
+    set("title", field(3, 30));
+    set("artist", field(33, 30));
+    set("album", field(63, 30));
+    if (!buf[125] && buf[126]) set("track", String(buf[126]));
+  }
+  f.close();
+  return 1;
 }
 
 // analyze() listens for ~32 ms and returns level (0-1), peak (0-1), pitch in Hz
@@ -807,6 +991,7 @@ static int di_text(lua_State *L) {
 // Hardware tables are created on first use (see boot.lua's _G metatable) and
 // dropped when an app closes, so their ~40 entries cost nothing until needed.
 static const luaL_Reg audioLib[] = {{"record", au_record}, {"play", au_play}, {"stop", au_stop},
+                                    {"pause", au_pause}, {"seek", au_seek}, {"tags", au_tags},
                                     {"status", au_status}, {"analyze", au_analyze}, {nullptr, nullptr}};
 static const luaL_Reg irLib[] = {{"send", ir_send}, {nullptr, nullptr}};
 static const luaL_Reg i2cLib[] = {{"scan", i2_scan}, {"read", i2_read}, {"write", i2_write},
@@ -816,9 +1001,10 @@ static const luaL_Reg loraLib[] = {{"begin", lo_begin}, {"send", lo_send}, {"rec
                                    {"busy", lo_busy}, {"stop", lo_stop}, {nullptr, nullptr}};
 static const luaL_Reg gpsLib[] = {{"start", gp_start}, {"stop", gp_stop}, {"read", gp_read}, {nullptr, nullptr}};
 static const luaL_Reg dispLib[] = {{"image", di_image}, {"fill", di_fill}, {"text", di_text}, {nullptr, nullptr}};
+extern const luaL_Reg musiclibFns[];  // musiclib.cpp
 static const struct { const char *name; const luaL_Reg *fns; } HW_LIBS[] = {
     {"audio", audioLib}, {"ir", irLib}, {"i2c", i2cLib}, {"http", httpLib},
-    {"lora", loraLib}, {"gps", gpsLib}, {"disp", dispLib}};
+    {"lora", loraLib}, {"gps", gpsLib}, {"disp", dispLib}, {"musiclib", musiclibFns}};
 
 // sys.hwlib(name) -> the table for that driver, or nil
 static int hw_lib(lua_State *L) {

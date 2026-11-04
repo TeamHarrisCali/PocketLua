@@ -3,6 +3,13 @@
 local col = ui.col
 
 local app = { title = "Recorder", icon = "mic", color = "red", order = 40, category = "media" }
+app.help = {
+  { "Enter", "Record / stop" },
+  { "Space", "Play / stop playback" },
+  { "Up/Dn", "Select recording" },
+  { "X", "Delete recording" },
+  { "Esc", "Home (keeps rec)" },
+}
 
 local BYTES_PER_SEC = 32000  -- audio.record default: 16 kHz, 16-bit mono
 

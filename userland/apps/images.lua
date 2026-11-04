@@ -3,6 +3,14 @@
 -- with disp.*, so it is redrawn only when the picture changes.
 local col = ui.col
 local app = { title = "Images", icon = "image", color = "teal", order = 23, category = "media" }
+app.help = {
+  { "Up/Dn", "Select" },
+  { "Enter", "View image" },
+  { "X", "Delete" },
+  { "Arrows", "Viewer: prev / next" },
+  { "Enter", "Viewer: caption" },
+  { "Esc", "Close viewer / home" },
+}
 
 local EXT = { bmp = true, jpg = true, jpeg = true, png = true }
 local MAX_FILES = 200

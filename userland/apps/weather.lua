@@ -4,6 +4,13 @@
 local col = ui.col
 
 local app = { title = "Weather", icon = "cloud", color = "blue", order = 31, category = "net" }
+app.help = {
+  { "Enter", "Wi-Fi / refresh" },
+  { "R", "Refresh" },
+  { "L", "Set place" },
+  { "U", "US / metric units" },
+  { "Esc", "Home" },
+}
 
 -- wttr.in wind arrows (UTF-8) as screen directions; they point where the wind blows.
 local ARROWS = {

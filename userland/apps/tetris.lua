@@ -2,6 +2,15 @@
 -- one row, Space drops all the way, P pauses.
 local col = ui.col
 local app = { title = "Blocks", icon = "blocks", color = "purple", order = 61, category = "games" }
+app.help = {
+  { "<>", "Move" },
+  { "Up/X", "Rotate" },
+  { "Down", "Soft drop" },
+  { "Space", "Hard drop" },
+  { "P", "Pause" },
+  { "Enter", "Play again" },
+  { "Esc", "Home" },
+}
 
 local W, H, CELL = 10, 20, 5
 local X0, Y0 = 70, 20                 -- well: 50 x 100 px, y 20-119

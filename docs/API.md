@@ -69,7 +69,10 @@ Use the `ui.*` toolkit (see `docs/UI.md`) rather than raw drawing where possible
 | `snd.tone(freq, ms)`, `snd.stop()`, `snd.volume(0-255)` | Simple tones; a new tone replaces the current one; the volume also applies to `audio.play` |
 | `shell.sound(kind)` | System sounds: "notify", "error", "alarm", "boot", "low" |
 | `audio.record(path[, rate=16000])` | Record WAV to a file. Returns true/false |
-| `audio.play(path)` | Play an MP3 or a 16-bit PCM WAV (MP3 is mixed to mono and needs about 47 KB of RAM: use `shell.focus(true)`). Returns true, or false and a reason |
+| `audio.play(path [, seconds])` | Play an MP3 or a 16-bit PCM WAV, optionally from a position (MP3 is mixed to mono and needs about 47 KB of RAM: use `shell.focus(true)`). Returns true, or false and a reason |
+| `audio.pause(on)`, `audio.seek(seconds)` | Pause/resume and jump within the playing track; `audio.status()` then reports "paused" |
+| `audio.tags(path)` | `{title, artist, album, track}` from the file's ID3 tag (missing fields left out) |
+| `musiclib.info()`, `.rows(kind, first, n)`, `.item(kind, i)`, `.albums_in(first, count)` | The music library index built by `tools/music_library.py` (see `src/musiclib.cpp`); `info()` is nil without one |
 | `audio.stop()` | Stop recording or playback |
 | `audio.status()` | "idle", "recording" or "playing"; seconds done; seconds total |
 | `audio.analyze()` | Listens for ~32 ms: level and peak (linear, 0-1 of full scale), pitch in Hz (0 = none), and 8 band amplitudes (0-1) centred on 100, 180, 320, 560, 1000, 1700, 2800 and 4000 Hz |

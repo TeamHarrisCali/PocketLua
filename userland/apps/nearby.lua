@@ -4,6 +4,11 @@ local col = ui.col
 local dev = require("dev")
 
 local app = { title = "Nearby", icon = "net", color = "teal", order = 12, category = "net" }
+app.help = {
+  { "Up/Dn", "Select device" },
+  { "Enter", "Device actions" },
+  { "Esc", "Stop watching / home" },
+}
 
 local sel, top = 1, 1
 local peers = {}

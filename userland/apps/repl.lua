@@ -2,6 +2,12 @@
 local col = ui.col
 
 local app = { title = "Lua REPL", icon = "term", color = "green", order = 3, category = "tools" }
+app.help = {
+  { "Enter", "Run Lua" },
+  { "Fn+;/.", "History back / fwd" },
+  { "Bksp", "Delete char" },
+  { "Esc", "Home" },
+}
 
 local input, history, hpos = "", {}, 0
 local out = {}

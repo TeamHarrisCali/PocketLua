@@ -3,6 +3,12 @@
 local col = ui.col
 
 local app = { title = "Piano", icon = "piano", color = "purple", order = 30, category = "media" }
+app.help = {
+  { "ASDF", "White keys (home row)" },
+  { "W-P", "Black keys (top row)" },
+  { ",/.", "Octave down / up" },
+  { "Esc", "Home" },
+}
 
 -- key -> semitones above C
 local WHITE = { a = 0, s = 2, d = 4, f = 5, g = 7, h = 9, j = 11, k = 12, l = 14, [";"] = 16 }

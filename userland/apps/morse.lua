@@ -3,6 +3,15 @@
 local col = ui.col
 
 local app = { title = "Morse", icon = "morse", color = "green", order = 44, category = "tools" }
+app.help = {
+  { "Tab", "Next mode" },
+  { "Up/Dn", "Speed (WPM)" },
+  { "Enter", "Play / replay / dah" },
+  { "A-Z", "Type text / answer" },
+  { "Space", "Key mode: dit" },
+  { "Bksp", "Delete / undo" },
+  { "Del", "Clear all" },
+}
 
 local MORSE = {
   A = ".-", B = "-...", C = "-.-.", D = "-..", E = ".", F = "..-.", G = "--.", H = "....", I = "..",

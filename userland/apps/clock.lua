@@ -3,6 +3,17 @@
 -- you leave; this app only shows and changes them.
 local col = ui.col
 local app = { title = "Clock", icon = "clock", color = "orange", order = 20, category = "tools" }
+app.help = {
+  { "Tab", "Next mode" },
+  { "Enter", "Start / stop" },
+  { "A", "Alarms: add" },
+  { "X", "Delete or cancel" },
+  { "Up/Dn", "Select alarm / timer" },
+  { "0-9", "Timer: minutes" },
+  { "<>", "Timer: -/+ 1 min" },
+  { "L", "Stopwatch: lap" },
+  { "R", "Stopwatch: reset" },
+}
 
 local TABS = { "Clock", "Alarms", "Timer", "Watch", "Pomo" }
 local DAYS = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" }

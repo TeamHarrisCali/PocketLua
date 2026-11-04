@@ -2,6 +2,15 @@
 -- data/todo.txt, one item per line as "[ ] text" or "[x] text".
 local col = ui.col
 local app = { title = "Notes", icon = "note", color = "blue", order = 21, category = "tools" }
+app.help = {
+  { "Tab", "Notes / To-do" },
+  { "Up/Dn", "Select" },
+  { "Enter", "Open / toggle done" },
+  { "N", "New note" },
+  { "A", "Add to-do" },
+  { "X", "Delete" },
+  { "C", "To-do: clear done" },
+}
 
 local TABS = { "Notes", "To-do" }
 local DIR = "data/notes"

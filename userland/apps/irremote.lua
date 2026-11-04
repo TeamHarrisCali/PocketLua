@@ -5,6 +5,17 @@
 local col = ui.col
 
 local app = { title = "IR Remote", icon = "remote", color = "red", order = 30, category = "net" }
+app.help = {
+  { "Arrows", "Select button" },
+  { "Enter", "Send" },
+  { "Tab", "Next brand" },
+  { "P", "Power" },
+  { "-=", "Volume down / up" },
+  { "[ ]", "Channel down / up" },
+  { "M", "Mute" },
+  { "I", "Input" },
+  { "A", "Samsung address mode" },
+}
 
 local BRANDS = {
   { id = "samsung", name = "Samsung", proto = "samsung", addr = 0x07,

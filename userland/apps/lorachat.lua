@@ -3,6 +3,14 @@
 -- Tab switches Chat / Peers / Setup. The radio only runs while the app is open.
 local col = ui.col
 local app = { title = "LoRa Chat", icon = "antenna", color = "orange", order = 51, category = "net" }
+app.help = {
+  { "Tab", "Chat / Peers / Setup" },
+  { "Enter", "Send / info / change" },
+  { "Up/Dn", "Scroll / pick row" },
+  { "<>", "Setup: change value" },
+  { "Esc", "Clear, then go back" },
+  { "R", "Retry radio" },
+}
 
 local geo = require("geo_math")
 

@@ -58,3 +58,7 @@ The old names (`panel`, `panel2`, `dim`, `bar`) still work, but use the tokens a
 - **Memory.** Load data when needed and free it in `close()`. Build lists in `update()` or on key presses, not in `draw()`. Never run anything just to read metadata.
 - **App header.** Keep it on one line: `local app = { title = "Clock", icon = "clock", color = "orange", order = 20, category = "tools" }`. The home screen reads it as text. Categories: `system`, `tools`, `media`, `games`, `net`.
 - **Resume.** If returning to an app should feel continuous, return a small table from `app.save()`. It comes back as the second argument of `app.init(args, saved)`.
+
+## Key help (Fn+H)
+
+Every app lists its keys in `app.help = { { "Enter", "Play / pause" }, ... }` right after its header line: short key labels like the footer's, descriptions of at most 22 characters. Fn+H shows them in an overlay, followed by the system keys; `tools/tests/help.lua` checks every app has them.

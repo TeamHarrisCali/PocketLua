@@ -4,6 +4,15 @@
 local col = ui.col
 
 local app = { title = "Beat Box", icon = "drum", color = "orange", order = 43, category = "media" }
+app.help = {
+  { "Arrows", "Move cursor" },
+  { "Space", "Toggle step" },
+  { "P", "Play / stop" },
+  { "-=", "Tempo" },
+  { "[ ]", "Bass pitch" },
+  { "S", "Save" },
+  { "C", "Clear pattern" },
+}
 
 local FILE = "data/beatbox.txt"
 local NAMES = { "Kick", "Snare", "Hat", "Bass" }

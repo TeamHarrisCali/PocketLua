@@ -1,6 +1,13 @@
 -- 2048: slide the tiles, merge equal numbers, reach 2048. N starts over.
 local col = ui.col
 local app = { title = "2048", icon = "grid", color = "orange", order = 62, category = "games" }
+app.help = {
+  { "Arrows", "Slide tiles" },
+  { "WASD", "Slide tiles" },
+  { "N", "New game" },
+  { "Enter", "Continue / new game" },
+  { "Esc", "Home" },
+}
 
 local rules = require("games_2048")
 local WASD = { w = "up", a = "left", s = "down", d = "right" }

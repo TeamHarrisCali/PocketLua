@@ -10,12 +10,14 @@ assert(load(src:match("^(.-)%-%- %-+ helpers"), "=stubs"))()
 local A = { state = "idle", done = 0, total = 0, fail = nil, level = 0.2, pitch = 440, mic = true }
 local function hw(name, ...) hw_calls[#hw_calls + 1] = { name, ... } end
 audio.record = function(p) hw("record", p); A.state, A.done, A.total = "recording", 0, 0; return true end
-audio.play = function(p)
-  hw("play", p)
+audio.play = function(p, at)
+  hw("play", p, at)
   if A.fail then return false, A.fail end
-  A.state, A.done, A.total = "playing", 0, 3
+  A.state, A.done, A.total = "playing", at or 0, 3
   return true
 end
+audio.pause = function(on) hw("pause", on); A.state = on and "paused" or "playing"; return on end
+audio.seek = function(s) hw("seek", s) end
 audio.stop = function() hw("stop"); A.state = "idle" end
 audio.status = function() return A.state, A.done, A.total end
 local analyze_calls = 0
@@ -142,78 +144,136 @@ sys.storage = real_storage
 shell.home(); frames(2)
 
 -- ------------------------------------------------------------ music
+-- without a library: folders
 sys.write_text("data/music/a_song.wav", "RIFF")
 sys.write_text("data/music/b_song.wav", "RIFF")
-sys.write_text("data/music/c_song.MP3", "ID3")
 sys.write_text("data/music/notes.txt", "x")
 sys.mkdirs("data/music/Artist/Album")
 sys.write_text("data/music/Artist/Album/01 First.mp3", "ID3")
 sys.write_text("data/music/Artist/Album/02 Second.mp3", "ID3")
+cfg.set("music_resume", nil)
 shell.launch("music"); frames(3)
 alive("music", "launches")
 check(shell.focused, "music: turns on focus mode")
 s, f = screen()
-check(has(s, "Artist") and has(s, "a_song") and has(s, "b_song") and has(s, "c_song") and not has(s, "notes") and f,
-  "music: lists folders, MP3 and WAV files only")
-key("down")  -- past the Artist folder
-key("enter")
+check(has(s, "Now Playing") and has(s, "Folders") and not has(s, "Artists") and f, "music: menu without a library")
+key("down"); key("enter")
+s = screen()
+check(has(s, "Artist/") and has(s, "a_song") and has(s, "b_song") and not has(s, "notes"), "music: Folders lists folders and tracks")
+key("down"); key("enter")
 check(last("play")[2] == "data/music/a_song.wav", "music: Enter plays the selection")
+s = screen()
+check(has(s, "NOW PLAYING") and has(s, "a_song"), "music: playing goes full screen")
+key("space")
+check(last("pause")[2] == true and has(screen(), "Paused"), "music: Space pauses")
+key("space")
+check(last("pause")[2] == false and has(screen(), "Playing"), "music: Space resumes")
+A.done = 1.5; frames(2)
+check(has(screen(), "0:01") and has(screen(), "0:03"), "music: shows time done and total")
+key("]")
+check(last("seek")[2] == 11.5, "music: ] seeks ahead 10 s")
 key("right")
 check(last("play")[2] == "data/music/b_song.wav", "music: right skips to the next track")
 key("left")
 check(last("play")[2] == "data/music/a_song.wav", "music: left goes back")
-A.done = 1.5; frames(2)
-check(has(screen(), "0:01/0:03"), "music: shows time done / total")
 local plays = count("play")
 A.state = "idle"; frames(40)
 check(count("play") == plays + 1 and last("play")[2] == "data/music/b_song.wav", "music: advances when a track ends")
-key("enter")
-check(A.state == "idle", "music: Enter stops the playing track")
-for _ = 1, 3 do key("up") end
-key("enter")
-s = screen()
-check(has(s, "Artist") and has(s, "Album") and not has(s, "a_song"), "music: Enter opens a folder")
-key("enter")
-check(has(screen(), "First") and has(screen(), "Second"), "music: shows the album's tracks")
-key("enter")
+key("r"); key("r")
+check(has(screen(), "RPT1"), "music: R cycles repeat")
+key("r")
+key("esc")
+check(has(screen(), "a_song") and not has(screen(), "NOW PLAYING"), "music: Esc shows the list")
+frames(470)
+check(has(screen(), "NOW PLAYING"), "music: idle brings Now Playing back")
+key("esc"); key("up"); key("up"); key("enter")
+check(has(screen(), "Album"), "music: Enter opens a folder")
+key("enter"); key("enter")
 check(last("play")[2] == "data/music/Artist/Album/01 First.mp3", "music: plays a track in a subfolder")
 A.state = "idle"; frames(40)
 check(last("play")[2] == "data/music/Artist/Album/02 Second.mp3", "music: the album plays on in order")
-key("esc"); key("esc")
-check(shell.app() == "music" and has(screen(), "a_song"), "music: Esc goes up to the top folder")
-key("b"); key("enter")
-check(last("play")[2] == "data/music/b_song.wav", "music: a letter jumps to the first name starting with it")
-key("enter")
-for i = 1, 300 do sys.write_text(string.format("data/music/Band %03d/x.mp3", i), "ID3") end
-key("esc"); shell.launch("music"); frames(3)
-alive("music", "lists 300 artists")
-key("z"); key("b"); frames(2)
-alive("music", "letter jump in a long list")
-for i = 1, 300 do sys.remove(string.format("data/music/Band %03d/x.mp3", i)) end
-key("esc"); shell.launch("music"); frames(2)
 local v0 = tonumber(cfg.get("vol")) or 100
 key("=")
 check(tonumber(cfg.get("vol")) > v0 and last("volume")[2] == tonumber(cfg.get("vol")), "music: = raises the volume")
 key("-"); key("-")
 check(tonumber(cfg.get("vol")) < v0, "music: - lowers the volume")
-A.fail = "not a 16-bit PCM WAV"
-key("down"); key("enter")
-check(toasts[#toasts] == "not a 16-bit PCM WAV", "music: a play failure is shown as a toast")
+-- resume where it stopped
+A.done = 42; frames(2)
+shell.home(); frames(2)
+check(has(cfg.get("music_resume") or "", "Artist/Album"), "music: remembers the track on close")
+shell.launch("music"); frames(3)
+s = screen()
+check(has(s, "NOW PLAYING") and has(s, "Second") and has(s, "Paused"), "music: reopens on the last track")
+key("space")
+check(last("play")[2] == "data/music/Artist/Album/02 Second.mp3" and last("play")[3] == 42, "music: Space resumes at the saved time")
+A.fail = "only 16-bit PCM WAV is supported"
+key("left")
+check(toasts[#toasts] == A.fail, "music: a play failure is shown as a toast")
 alive("music", "survives a play failure")
 A.fail = nil
-for _, k in ipairs({ "down", "down", "up", "esc" }) do key(k) end
-check(shell.app() == "home", "music: Esc goes home")
-shell.open_file("sd:/other/song.wav"); frames(2)
-check(shell.app() == "music" and last("play")[2] == "sd:/other/song.wav", "music: open_file plays the file at once")
-check(has(screen(), "song"), "music: the opened file is in the list")
 shell.home(); frames(2)
-for _, n in ipairs({ "a_song.wav", "b_song.wav", "c_song.MP3", "notes.txt", "Artist/Album/01 First.mp3",
-  "Artist/Album/02 Second.mp3", "Artist/Album", "Artist" }) do sys.remove("data/music/" .. n) end
+
+-- with a library (fake musiclib)
+local T = {
+  { "data/music/Abba/Gold/01 Dancing Queen.mp3", "Dancing Queen", "ABBA", "Gold", "Pop", "1" },
+  { "data/music/Abba/Gold/02 Waterloo.mp3", "Waterloo", "ABBA", "Gold", "Pop", "2" },
+  { "data/music/Zed/Z/01 Zeta.mp3", "Zeta", "Zed", "Z", "Rock", "1" },
+}
+local ART = { { "ABBA", 1, 2 }, { "Zed", 3, 1 } }
+local ALB = { { "Gold", "ABBA", 1, 2 }, { "Z", "Zed", 3, 1 } }
+local GEN = { { "Pop", 1, 2 }, { "Rock", 3, 1 } }
+local G = { 1, 2, 3 }
+local saved_lib = musiclib
+musiclib = {
+  info = function() return { tracks = 3, artists = 2, albums = 2, genres = 2 } end,
+  rows = function(kind, first, n)
+    local src = kind == "artists" and ART or kind == "albums" and ALB or kind == "genres" and GEN or T
+    local out = {}
+    for i = first, math.min(first + n - 1, #src) do
+      local r = src[i]
+      out[#out + 1] = kind == "tracks" and { label = r[2], value = r[3] } or { label = r[1], value = tostring(r[2]) }
+    end
+    return out
+  end,
+  item = function(kind, i)
+    if kind == "gtracks" then return G[i] end
+    local r = (kind == "artists" and ART or kind == "albums" and ALB or kind == "genres" and GEN or T)[i]
+    if r then return table.unpack(r) end
+  end,
+  albums_in = function(first, count) return { { label = "Gold", value = "2", first = first, count = count } } end,
+}
+__hw_musiclib = musiclib
+cfg.set("music_resume", nil)
+shell.launch("music"); frames(3)
+s = screen()
+check(has(s, "Artists") and has(s, "Albums") and has(s, "Genres") and has(s, "Shuffle all"), "music: library menu")
+key("down"); key("enter")
+check(has(screen(), "ABBA") and has(screen(), "Zed"), "music: Artists lists the library")
+key("z")
+check(has(screen(), "2/2"), "music: a letter jumps in the artist list")
+key("a"); key("enter")
+check(has(screen(), "Gold"), "music: an artist shows their albums")
+key("enter")
+check(has(screen(), "Dancing Queen") and has(screen(), "Waterloo"), "music: an album shows its tracks")
+key("down"); key("enter")
+check(last("play")[2] == "data/music/Abba/Gold/02 Waterloo.mp3", "music: plays a library track")
+check(has(screen(), "Waterloo") and has(screen(), "ABBA") and has(screen(), "Gold"), "music: Now Playing shows the tags")
+key("esc"); key("esc"); key("esc"); key("esc")
+key("down"); key("down"); key("enter")
+check(has(screen(), "Pop") and has(screen(), "Rock"), "music: Genres lists the genres")
+key("down"); key("enter"); key("enter")
+check(last("play")[2] == "data/music/Zed/Z/01 Zeta.mp3", "music: plays from a genre")
+shell.home(); frames(2)
+musiclib, __hw_musiclib = saved_lib, saved_lib
+for _, n in ipairs({ "a_song.wav", "b_song.wav", "notes.txt", "Artist/Album/01 First.mp3", "Artist/Album/02 Second.mp3" }) do
+  sys.remove("data/music/" .. n)
+end
+cfg.set("music_resume", nil)
 shell.launch("music"); frames(2)
-s, f = screen()
-check(has(s, "No music found") and f, "music: empty state without files")
-key("enter"); key("right")
-alive("music", "keys with no tracks")
+key("down"); key("enter")
+check(has(screen(), "Empty") or has(screen(), "Recordings"), "music: empty folder list")
+key("enter"); key("right"); key("space")
+alive("music", "keys with nothing to play")
 shell.home(); frames(2)
 
 -- ------------------------------------------------------------ sound lab

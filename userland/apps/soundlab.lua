@@ -3,6 +3,12 @@
 local col = ui.col
 
 local app = { title = "Sound Lab", icon = "wave", color = "teal", order = 42, category = "media" }
+app.help = {
+  { "Tab", "Next mode" },
+  { "<>", "Prev / next mode" },
+  { "Space", "Pause / resume" },
+  { "Esc", "Home" },
+}
 
 local TABS = { "Level", "Spectrum", "Tuner" }
 local NOTES = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" }

@@ -4,7 +4,8 @@
 collectgarbage("incremental", 100, 400)
 
 -- Hardware driver tables are created on first use.
-local HW = { audio = true, ir = true, i2c = true, http = true, lora = true, gps = true, disp = true }
+local HW = { audio = true, ir = true, i2c = true, http = true, lora = true, gps = true, disp = true,
+  musiclib = true }
 setmetatable(_G, { __index = function(t, k)
   if HW[k] then
     local lib = sys.hwlib(k)

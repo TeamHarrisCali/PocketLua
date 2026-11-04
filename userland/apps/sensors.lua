@@ -7,6 +7,13 @@
 local col = ui.col
 
 local app = { title = "Sensors", icon = "chip", color = "orange", order = 33, category = "tools" }
+app.help = {
+  { "Up/Dn", "Select device" },
+  { "Enter", "Open device" },
+  { "R", "Rescan / reload regs" },
+  { "T", "Toggle SHT3x / SHT4x" },
+  { "Esc", "Back / home" },
+}
 
 local NAMES = {
   [0x23] = "BH1750 light", [0x5C] = "BH1750 light", [0x29] = "VL53L0X distance", [0x38] = "AHT20 temp/hum",

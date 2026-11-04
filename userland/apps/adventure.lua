@@ -2,6 +2,15 @@
 -- Enter; Fn+; and Fn+. scroll. Progress is saved to data/adventure.sav.
 local col = ui.col
 local app = { title = "Adventure", icon = "book", color = "blue", order = 64, category = "games" }
+app.help = {
+  { "Enter", "Run command" },
+  { "Up/Dn", "Scroll text" },
+  { "help", "List commands" },
+  { "look", "See the room" },
+  { "go n", "Move (n s e w u d)" },
+  { "take", "Pick up an item" },
+  { "use", "Use or light an item" },
+}
 
 local FILE = "data/adventure.sav"
 local ROWS, LH, MAXLINES, MAXIN = 9, 10, 80, 36

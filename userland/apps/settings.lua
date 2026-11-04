@@ -3,6 +3,12 @@
 local col = ui.col
 
 local app = { title = "Settings", icon = "gear", color = "orange", order = 1, category = "system" }
+app.help = {
+  { "Up/Dn", "Select" },
+  { "Enter", "Open / select" },
+  { "<>", "Change value" },
+  { "Esc", "Back / home" },
+}
 
 local stack, page, sel, top = {}, nil, 1, 1
 local rows = {}

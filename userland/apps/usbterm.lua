@@ -3,6 +3,12 @@
 local col = ui.col
 
 local app = { title = "USB Serial", icon = "term", color = "teal", order = 11, category = "net" }
+app.help = {
+  { "Type", "Compose a line" },
+  { "Enter", "Send line" },
+  { "Bksp", "Delete char" },
+  { "Esc", "Home" },
+}
 
 local log, input, partial = {}, "", ""
 

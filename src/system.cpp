@@ -27,7 +27,7 @@ namespace shell {
 
 // ================================================================ state
 enum Screen { DESKTOP, DRAWER, APP, ERRSCREEN };
-enum Overlay { OV_NONE, OV_LOCK, OV_QUICK, OV_NOTES };
+enum Overlay { OV_NONE, OV_LOCK, OV_QUICK, OV_NOTES, OV_HELP };
 static Screen screen = DESKTOP;
 static Overlay overlay = OV_NONE;
 static bool safe = false;
@@ -909,6 +909,80 @@ static void drawLock() {
   ui::footer(h, 1);
 }
 
+// ---------------------------------------------------------------- Fn+H help
+// The keys for what is on screen (an app's `help` table, or the desktop's
+// and drawer's own), then the system-wide ones. Built when opened.
+static std::vector<ui::Row> helpRows;
+static int helpSel = 1, helpTop = 1;
+
+static void helpAdd(const char *key, const String &what, bool dim = false) {
+  ui::Row r;
+  r.label = what;
+  r.value = key;
+  r.dim = dim;
+  helpRows.push_back(r);
+}
+
+static void openHelp() {
+  helpRows.clear();
+  helpSel = helpTop = 1;
+  if (screen == APP && vm::L && appRef != LUA_NOREF) {
+    lua_State *L = vm::L;
+    lua_rawgeti(L, LUA_REGISTRYINDEX, appRef);
+    lua_getfield(L, -1, "help");
+    int n = lua_istable(L, -1) ? lua_rawlen(L, -1) : 0;
+    for (int i = 1; i <= n && i <= 16; i++) {
+      lua_rawgeti(L, -1, i);
+      if (lua_istable(L, -1)) {
+        lua_rawgeti(L, -1, 1);
+        lua_rawgeti(L, -2, 2);
+        if (lua_isstring(L, -2) && lua_isstring(L, -1)) helpAdd(lua_tostring(L, -2), lua_tostring(L, -1));
+        lua_pop(L, 2);
+      }
+      lua_pop(L, 1);
+    }
+    lua_pop(L, 2);
+    if (helpRows.empty()) helpAdd("", "No key list for this app", true);
+  } else if (screen == DESKTOP) {
+    helpAdd(",/", "Choose a dock app");
+    helpAdd("Enter", "Open it");
+    helpAdd("Tab", "All apps");
+    helpAdd("A-Z", "Search apps");
+  } else if (screen == DRAWER) {
+    helpAdd(";.", "Move");
+    helpAdd("Enter", "Open app / folder");
+    helpAdd("A-Z", "Search");
+    helpAdd("P", "Pin to dock");
+    helpAdd("^E", "Edit the app");
+    helpAdd("^N", "New app");
+    helpAdd("Esc", "Back");
+  }
+  helpAdd("", "Anywhere", true);
+  helpAdd("Fn+H", "This help");
+  helpAdd("Fn+Q", "Quick settings");
+  helpAdd("Fn+N", "Notifications");
+  helpAdd("Fn+P", "Screenshot");
+  helpAdd("Fn+L", "Lock");
+  helpAdd("Fn+;.,/", "Arrow keys");
+  helpAdd("Fn+`", "Esc");
+  overlay = OV_HELP;
+}
+
+static void drawHelp() {
+  ui::fill(0, 14, 240, 121, col.bg);
+  ui::text(6, 17, "KEYS", col.muted);
+  helpTop = ui::list(helpRows, helpSel, helpTop, 4, 28, 230, 15, 6);
+  static const ui::Hint h[] = {{";.", "Scroll"}, {"Esc", "Close"}};
+  ui::footer(h, 2);
+}
+
+static void helpKey(const Key &k) {
+  String key = k.key;
+  if (key == "up" || (k.text && k.text[0] == ';')) helpSel = max(1, helpSel - 1);
+  else if (key == "down" || (k.text && k.text[0] == '.')) helpSel = min((int)helpRows.size(), helpSel + 1);
+  else if (key == "esc" || key == "enter") { overlay = OV_NONE; helpRows.clear(); }
+}
+
 static void drawNotes() {
   ui::fill(0, 14, 240, 121, col.bg);
   ui::text(6, 17, "NOTIFICATIONS", col.muted);
@@ -1291,6 +1365,7 @@ void drawBand() {
   if (overlay == OV_LOCK) drawLock();
   else if (overlay == OV_QUICK) drawQuick();
   else if (overlay == OV_NOTES) drawNotes();
+  else if (overlay == OV_HELP) drawHelp();
   if (dlg.kind != DLG_NONE) drawDialog();
   if (toastMsg.length()) {
     String m = ui::fit(toastMsg, 220);
@@ -1338,10 +1413,12 @@ void key(const Key &k) {
     if (c == 'n') { overlay = overlay == OV_NOTES ? OV_NONE : OV_NOTES; ui::status.unread = 0; notesSel = notesTop = 1; return; }
     if (c == 'p') { screenshot(); return; }
     if (c == 'l') { if (cget("lock") != "0") overlay = OV_LOCK; return; }
+    if (c == 'h') { if (overlay == OV_HELP) { overlay = OV_NONE; helpRows.clear(); } else openHelp(); return; }
   }
   if (dlg.kind != DLG_NONE) { dialogKey(k); return; }
   if (overlay == OV_QUICK) { quickKey(k); return; }
   if (overlay == OV_NOTES) { notesKey(k); return; }
+  if (overlay == OV_HELP) { helpKey(k); return; }
   switch (screen) {
     case DESKTOP: desktopKey(k); break;
     case DRAWER: drawerKey(k); break;

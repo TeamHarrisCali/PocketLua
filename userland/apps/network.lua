@@ -3,6 +3,14 @@
 local col = ui.col
 
 local app = { title = "Network", icon = "radar", color = "teal", order = 32, category = "net" }
+app.help = {
+  { "Tab", "Next tab" },
+  { "<>", "Prev / next tab" },
+  { "Up/Dn", "Select" },
+  { "Enter", "Info / connect / run" },
+  { "R", "Rescan / refresh" },
+  { "X", "Tools: clear results" },
+}
 
 local TABS = { "Scan", "Info", "Tools" }
 local MAX_NETS, MAX_RESULTS = 20, 12

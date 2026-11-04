@@ -3,6 +3,14 @@
 -- axes, C makes the current position "flat". Settings are remembered.
 local col = ui.col
 local app = { title = "Marble", icon = "ball", color = "teal", order = 63, category = "games" }
+app.help = {
+  { "Arrows", "Nudge ball" },
+  { "P", "Pause" },
+  { "C", "Zero (flat)" },
+  { "F/G", "Flip X / Y" },
+  { "R", "Swap axes; retry" },
+  { "Enter", "Next level" },
+}
 
 local CELL, MW, MH = 8, 28, 12
 local X0, Y0 = 8, 26                  -- maze 224 x 96 px, y 26-121

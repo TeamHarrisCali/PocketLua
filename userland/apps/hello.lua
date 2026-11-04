@@ -1,6 +1,10 @@
 -- A tiny example app. Press Esc, then E on this app's icon to edit it, change
 -- something, press Ctrl+S then Ctrl+R: the change is running immediately.
 local app = { title = "Hello", icon = "chip", color = "pink", order = 50, category = "tools" }
+app.help = {
+  { "Any", "Beep, count presses" },
+  { "Esc", "Home" },
+}
 
 local col = ui.col
 local x, y, vx, vy = 40, 40, 60, 45

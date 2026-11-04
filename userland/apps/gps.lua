@@ -3,6 +3,13 @@
 -- to sd:/gps (or data/gps without a card). The GPS only runs while open.
 local col = ui.col
 local app = { title = "GPS", icon = "pin", color = "green", order = 52, category = "net" }
+app.help = {
+  { "Tab", "Switch tab" },
+  { "U", "Units (km/h, mph)" },
+  { "R", "Reset max / trip" },
+  { "L", "Trip: start/stop log" },
+  { "Esc", "Back" },
+}
 
 local geo = require("geo_math")
 

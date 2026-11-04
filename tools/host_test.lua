@@ -141,9 +141,14 @@ lora = { begin = rec("lora_begin", true), send = rec("lora_send", true), recv = 
 gps = { start = rec("gps_start"), stop = rec("gps_stop"), read = function() return { valid = true, lat = 37.77, lon = -122.42,
   alt = 12, sats = 7, hdop = 1.1, speed = 3.5, course = 90, time = "12:00:00", date = "2026-11-03", chars = 1000 } end }
 disp = { image = rec("image", true), fill = rec("dfill"), text = rec("dtext") }
+audio.pause = function(on) return on end
+audio.seek = rec("seek")
+audio.tags = function() return {} end
+musiclib = { info = function() return nil end, rows = function() return {} end, item = function() end,
+  albums_in = function() return {} end }
 
 -- the device creates these on first use (sys.hwlib); keep copies for that
-for _, n in ipairs({ "audio", "ir", "i2c", "http", "lora", "gps", "disp" }) do _G["__hw_" .. n] = _G[n] end
+for _, n in ipairs({ "audio", "ir", "i2c", "http", "lora", "gps", "disp", "musiclib" }) do _G["__hw_" .. n] = _G[n] end
 
 -- loopback transport: whatever we send comes back as if the peer sent it
 local net_in = {}
