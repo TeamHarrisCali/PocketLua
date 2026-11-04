@@ -27,7 +27,7 @@ using ui::col;
 extern const char *volatile g_crumb;  // main.cpp: what the main loop is doing
 bool appstorePending();  // appstore.cpp: the App Store asked for a download
 void appstoreRun();
-void appstoreBoot();  // after a firmware change: drop card copies of system files
+void appstoreBoot();  // at boot: drop card copies that hide built-in system files
 void hwReleaseAudio();  // hw.cpp: speaker and mic off when idle
 void hwReleaseDrivers();  // hw.cpp: LoRa and GPS off
 bool hwAudioBusy();       // hw.cpp: recording or playing

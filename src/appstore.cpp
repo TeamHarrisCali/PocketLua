@@ -587,24 +587,41 @@ void switchChannel(const String &to) {
   else result = "Now on " + String(to == "main" ? "Release" : "Beta") + "; everything was already the same";
 }
 
-// After a firmware change: copies of built-in system files that an App Store
-// or release install put on the card (a .lua with its .luac) are removed, so
-// the new firmware's own versions are used. A file edited on the device has
-// no .luac beside it (saving deletes it) and stays.
-void firmwareChanged() {
-  String now = POCKETLUA_BUILD + 8;
-  if (cfgGet("fw_seen") == now) return;
+// Whether the card's copy of a built-in file is byte for byte the built-in one.
+bool sameAsBuiltin(const String &rel, const EmbFile &e) {
+  File f = store::openStored(rel);
+  if (!f) return false;
+  bool same = f.size() == e.len;
+  uint8_t buf[256];
+  size_t at = 0;
+  int n;
+  while (same && (n = f.read(buf, sizeof buf)) > 0) {
+    same = memcmp(buf, e.data + at, n) == 0;
+    at += n;
+  }
+  f.close();
+  return same && at == e.len;
+}
+
+// At every boot: card copies of built-in system files hide the firmware's own
+// versions, so copies that an App Store or release install put there (a .lua
+// with its .luac) and copies identical to the built-in one are removed. A
+// file edited on the device differs and has no .luac (saving deletes it), so
+// it stays.
+void cleanSystemCopies() {
   int n = 0;
   for (size_t i = 0; i < EMBEDDED_COUNT; i++) {
     String p = EMBEDDED[i].path;
-    if (!store::inStorage(p) || !store::inStorage(p + "c")) continue;
+    if (!store::inStorage(p)) continue;
+    if (!store::inStorage(p + "c") && !sameAsBuiltin(p, EMBEDDED[i])) continue;
     store::remove(p + "c");
     store::remove(p);
     n++;
   }
-  if (n) store::rescan();
-  cfgSet("fw_seen", now);
-  usbdev::log("firmware " + now + ": " + n + " old card copies of system files removed");
+  if (n) {
+    store::rescan();
+    usbdev::log(String("system files: ") + n + " card copies removed, the firmware's own are used");
+  }
 }
 
 // ---------------------------------------------------------------- Lua
@@ -666,8 +683,8 @@ int l_channel(lua_State *L) {
 
 }  // namespace
 
-// For the shell, at boot: drop stale card copies of system files.
-void appstoreBoot() { firmwareChanged(); }
+// For the shell, at boot: drop card copies that hide system files.
+void appstoreBoot() { cleanSystemCopies(); }
 
 // For the shell: an operation the App Store asked for, run with no app open.
 bool appstorePending() { return pendingOp.length() > 0; }
