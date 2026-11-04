@@ -24,6 +24,8 @@ extern M5Canvas canvas;
 using ui::col;
 
 extern const char *volatile g_crumb;  // main.cpp: what the main loop is doing
+bool appstorePending();  // appstore.cpp: the App Store asked for a download
+void appstoreRun();
 
 String tlsBench();  // tlsbench.cpp: crypto speed test (USB console !bench)
 
@@ -1327,6 +1329,17 @@ void runPending();
 
 void update(float dt) {
   if (pendingHomeFlag) { pendingHomeFlag = false; goHome(); }
+  // The App Store's downloads need the RAM an open app uses: close it, do the
+  // work (appstore.cpp draws its own progress), then open the store again.
+  if (appstorePending()) {
+    g_crumb = "app store";
+    closeApp(true);
+    M5Cardputer.Display.fillScreen(col.bg);
+    appstoreRun();
+    appsDirty = true;
+    launch("store", "", 0, true);
+    return;
+  }
   runPending();
   serviceAcc += dt;
   if (serviceAcc >= 1) { serviceAcc = 0; services(); }

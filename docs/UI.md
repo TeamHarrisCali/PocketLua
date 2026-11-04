@@ -54,7 +54,7 @@ The old names (`panel`, `panel2`, `dim`, `bar`) still work, but use the tokens a
 - **Reserved keys.** Fn+Q, Fn+N, Fn+P, Fn+L and the G0 button belong to the system. Don't use them in apps.
 - **Feedback.** Every action shows a result: a toast, a sound, or a visible change. Errors say what to do next ("Connect to Wi-Fi first").
 - **Drawing.** `draw()` must not change state. It runs once per screen band (three times per frame). Compute in `update(dt)` or `key(k)`.
-- **Files.** Everything LiveOS or an app writes goes under its own folder on the card (`/liveos/`): use LiveOS-relative paths like `data/<app>/...`. Never write to `sd:/...` outside `/liveos/`. The Files app may still browse the whole card.
+- **Files.** Everything LiveOS or an app writes goes under its own folder on the card (`/pocketlua/`): use LiveOS-relative paths like `data/<app>/...`. Never write to `sd:/...` outside `/pocketlua/`. The Files app may still browse the whole card.
 - **Memory.** Load data when needed and free it in `close()`. Build lists in `update()` or on key presses, not in `draw()`. Never run anything just to read metadata.
 - **App header.** Keep it on one line: `local app = { title = "Clock", icon = "clock", color = "orange", order = 20, category = "tools" }`. The home screen reads it as text. Categories: `system`, `tools`, `media`, `games`, `net`.
 - **Resume.** If returning to an app should feel continuous, return a small table from `app.save()`. It comes back as the second argument of `app.init(args, saved)`.

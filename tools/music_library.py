@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the Music app's library index for a LiveOS music folder (needs ffprobe).
 
-  music_library.py /run/media/$USER/CARD/liveos/data/music
+  music_library.py /run/media/$USER/CARD/pocketlua/data/music
 
 Reads the tags of every MP3/WAV under the folder and writes the index to
 <folder>/.library/. The Cardputer has too little RAM to sort a library, so the

@@ -35,6 +35,9 @@ RTC_NOINIT_ATTR static char stuckAt[40];
 RTC_NOINIT_ATTR static uint32_t stuckMagic;
 static const uint32_t STUCK = 0x57A11ED;
 
+// For long work on the main loop (App Store downloads): keeps the watch quiet.
+void feedWatch() { g_beat++; }
+
 static void watchMain(void *) {
   uint32_t last = g_beat, since = millis();
   bool told = false;

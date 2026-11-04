@@ -1,12 +1,24 @@
-# LiveOS for the Cardputer ADV
+# PocketLua for the Cardputer ADV
 
-A live-editable OS for the M5Stack Cardputer ADV. The C++ core owns the hardware and a Lua 5.4 VM. The home screen, apps, settings and system UI are Lua scripts you can edit on the device.
+A live-editable OS for the M5Stack Cardputer ADV. The C++ core owns the hardware and a Lua 5.4 VM; apps are Lua scripts you can edit on the device. (It began as "LiveOS"; some file names still say so.)
 
 ## Install (M5Launcher)
 
-Copy `dist/LiveOS.bin` to the SD card and launch it from M5Launcher. It is a plain app image, so Launcher is untouched. To flash directly instead, hold G0 while resetting and run `pio run -t upload`.
+Copy the firmware (`dist/LiveOS.bin`, or `PocketLua.bin` from the App Store) to the SD card and install it from M5Launcher. It is a plain app image, so Launcher is untouched.
 
-Updates over USB (`tools/deploy.sh`, which sends the firmware to `/liveos/LiveOS.bin`) are written but not yet working on the device; see TODO.md.
+The firmware holds only the core: Settings, the App Store and the editor. Every other app comes from the **App Store**, which downloads from this repository's `release/` folder over HTTPS (BearSSL, checked against ISRG Root X1) with the store app closed, verifies each file's SHA-256, and keeps the previous copy. Nothing updates by itself: press C in the store to check.
+
+On the card everything lives in `/pocketlua/` (renamed from `/liveos/` at first boot): `apps/<name>/main.lua` (+ `main.luac`, the bytecode that runs), `lib/`, `data/`.
+
+## Publishing apps
+
+```bash
+pio run                    # build (the firmware records the git commit)
+python3 tools/release.py   # release/: catalog.txt, apps and libraries as source + bytecode, PocketLua.bin
+git add release && git commit -m "Release" && git push origin development:beta
+```
+
+The device reads the `beta` branch by default. Store-only apps (not part of the userland set) go in `store/apps/`.
 
 ## Keys
 

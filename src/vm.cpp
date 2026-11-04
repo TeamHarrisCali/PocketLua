@@ -40,6 +40,13 @@ void reserveArena() {
   usbdev::log(String("lua arena: ") + ARENA_SIZE / 1024 + " KB reserved");
 }
 
+// While no app is open the arena is empty: native code (the App Store's
+// downloads) may use it then. Never while a Lua state exists.
+void *arenaBorrow(size_t n) { return arena && !L ? multi_heap_malloc(arena, n) : nullptr; }
+void arenaReturn(void *p) {
+  if (arena && p) multi_heap_free(arena, p);
+}
+
 size_t arenaFree() { return arena ? multi_heap_free_size(arena) : heap_caps_get_free_size(MALLOC_CAP_8BIT); }
 static const uint32_t CALL_BUDGET_MS = 2500;
 static uint32_t callStart = 0;

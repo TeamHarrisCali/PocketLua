@@ -144,12 +144,14 @@ disp = { image = rec("image", true), fill = rec("dfill"), text = rec("dtext") }
 audio.pause = function(on) return on end
 audio.seek = rec("seek")
 audio.tags = function() return {} end
+appstore = { list = function() return nil end, run = rec("store_run"), result = function() return "" end,
+  channel = function() return "beta" end }
 musiclib = { info = function() return nil end, rows = function() return {} end, item = function() end,
   albums_in = function() return {} end, scan = function() return true end,
   scan_status = function() return "done", 0, "" end }
 
 -- the device creates these on first use (sys.hwlib); keep copies for that
-for _, n in ipairs({ "audio", "ir", "i2c", "http", "lora", "gps", "disp", "musiclib" }) do _G["__hw_" .. n] = _G[n] end
+for _, n in ipairs({ "audio", "ir", "i2c", "http", "lora", "gps", "disp", "musiclib", "appstore" }) do _G["__hw_" .. n] = _G[n] end
 
 -- loopback transport: whatever we send comes back as if the peer sent it
 local net_in = {}

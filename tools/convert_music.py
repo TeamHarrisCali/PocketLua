@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Make a LiveOS-playable copy of a music library (needs ffmpeg).
 
-  convert_music.py ~/Music /run/media/$USER/CARD/liveos/data/music [--bitrate 128k] [--jobs 4]
+  convert_music.py ~/Music /run/media/$USER/CARD/pocketlua/data/music [--bitrate 128k] [--jobs 4]
 
 The device plays MP3 and WAV. Every other audio file in SOURCE (M4A, FLAC,
 AIFF, OGG, ...) becomes an MP3 at the same place under DEST, with its tags

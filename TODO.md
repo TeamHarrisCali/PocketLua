@@ -18,7 +18,7 @@ Open issues found on the device. Newest first.
   embedded sources: the device runs the bytecode, and only the editor reads the source, so about
   270 KB of it could shrink. Also check how large an app M5Launcher accepts.
 
-- **App updates over the internet** (user idea, 2026-11-04): publish the apps on GitHub; on startup
+- **App updates over the internet** (user idea, 2026-11-04; built as the App Store, see README): publish the apps on GitHub; on startup
   (with Wi-Fi) LiveOS checks a manifest and downloads new or changed apps to `/liveos/apps/`, so new apps
   and fixes don't need a new firmware. Only native changes (C++) would need a firmware update.
   Notes for the design:

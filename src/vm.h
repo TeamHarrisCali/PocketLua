@@ -14,6 +14,9 @@ extern String lastError;
 // buffers fragment the heap, and Lua needs blocks bigger than what is left.
 void reserveArena();
 size_t arenaFree();
+// The arena for native code while no app is open (nullptr otherwise).
+void *arenaBorrow(size_t n);
+void arenaReturn(void *p);
 bool open();
 void close();
 // lua_pcall with the script time budget; on error sets lastError, pops it

@@ -262,88 +262,52 @@ key("esc")
 check(shell.app() == "home", "Esc goes home from images")
 
 -- ================================================================ App Store
-local DEMO = 'local app = { title = "Demo", icon = "app", category = "tools" }\n' ..
-  'function app.draw() ui.center(60, "demo") ui.footer({ { "Esc", "Home" } }) end\nreturn app\n'
-sys.write_text("data/install/demo.lua", DEMO)
-sys.write_text("data/install/bad.lua", "print('hi')\n")
-sys.write_text("data/install/split.lua", "local app = {\n  title = \"Split\" }\nreturn app\n")
+-- a fake appstore module (the real one is native: src/appstore.cpp)
+local AS = { cat = nil, runs = {}, result = "" }
+appstore = {
+  list = function() return AS.cat end,
+  run = function(op, arg) AS.runs[#AS.runs + 1] = { op, arg or "" } end,
+  result = function() return AS.result end,
+  channel = function() return "beta" end,
+}
+__hw_appstore = appstore
+local function lastrun() local r = AS.runs[#AS.runs]; return r and (r[1] .. " " .. r[2]) or "" end
 launch("store")
-check(shell.app() == "store", "store launches")
-check(shows("Demo") and shows("bad.lua"), "SD apps are listed by title")
--- rows are sorted by title: bad.lua, Demo, split.lua
-key("enter")
-check(shows("Not a LiveOS app") and not sys.exists("apps/bad.lua"), "a file without a header is refused")
-key("down"); key("down"); key("enter")
-check(not sys.exists("apps/split.lua"), "a header split over lines is refused")
-key("up"); key("enter")
-check(shows("is installed"), "install asks to open the app")
-key("n")
-check(shows("installed"), "the SD list marks the app installed")
-check(sys.read_text("apps/demo.lua") == DEMO, "Enter installs the app into apps/demo.lua")
-key("enter")
-check(shows("Replace app"), "installing again asks before overwriting")
-key("y")
-check(shows("is installed"), "overwrite confirmed")
-key("y"); frames(2)
-check(shell.app() == "demo", "the installed app opens")
+check(shell.app() == "store" and shows("No catalog yet") and shows("Press C"), "store: explains C before the first check")
+key("c")
+check(lastrun() == "check ", "store: C asks the shell to check GitHub")
+local function a(name, title, status, core) return { name = name, title = title, status = status, core = core or false,
+  category = "tools", icon = "app", desc = title .. " does things", size = 20000 } end
+AS.cat = { firmware = { build = "abc12345", running = "0e065750", size = 2600000, status = "update" }, apps = {
+  a("music", "Music", "available"), a("clock", "Clock", "update"), a("settings", "Settings", "installed", true),
+  a("snake", "Snake", "installed"), a("edit", "Editor", "installed", true), a("gps", "GPS", "available") } }
+AS.result = "checked"
 launch("store")
--- web
+check(shows("Firmware abc12345") and shows("Clock") and not shows("Music"), "store: Updates lists firmware and newer apps")
+key("enter")
+check(lastrun() == "apply firmware", "store: Enter on the firmware downloads it")
+key("down"); key("space"); key("enter")
+check(lastrun() == "apply install:clock", "store: Space marks, Enter installs what is marked")
 key("tab")
-check(shows("Wi-Fi connected"), "web tab shows Wi-Fi state")
-key("enter"); for _ = 1, 7 do key("backspace") end
-local plain_dl = http.download
-http.download = function(url, path) sys.write_text(path, "Sunny +18C"); return 10, 200 end  -- not an app
-type_text("x/forecast.lua"); key("enter"); frames(3)
-http.download = plain_dl
-check(shows("Not a LiveOS app"), "a download without a header is refused")
-local got_url, got_max
-local real_dl = http.download
-local function serve(body, code)  -- fake server: http.download writes the body to the file
-  http.download = function(url, path, max)
-    got_url, got_max = url, max
-    if not body then return nil, code end
-    sys.write_text(path, body)
-    return #body, code
-  end
-end
-serve('local app = { title = "Web App", icon = "app" }\nreturn { title = "Web App" }\n', 200)
-key("enter"); for _ = 1, 40 do key("backspace") end
-type_text("example.com/apps/webapp.lua"); key("enter"); frames(3)
-check(got_url == "http://example.com/apps/webapp.lua" and got_max == 32768, "http.download gets the URL with a 32K limit")
-check(cfg.get("store_url") == "http://example.com/apps/webapp.lua", "last URL is remembered")
-check(shows("Save Web App as") and shows("webapp"), "name prompt offers the file name")
+check(shows("Music") and shows("GPS") and not shows("Snake"), "store: Browse lists apps you don't have")
+key("g"); key("p")
+check(shows("Search: gp") and shows("GPS") and not shows("Music"), "store: typing searches Browse")
 key("enter")
-check(sys.exists("apps/webapp.lua"), "web app is saved")
-key("n")
-serve(nil, "connection refused")
-key("enter"); key("enter"); frames(3)
-check(shows("Download failed"), "download errors are shown")
-serve("<html>404</html>", 404)
-key("enter"); key("enter"); frames(3)
-check(shows("Server replied 404"), "HTTP status errors are shown")
-serve('local app = { title = "Home" }\n', 200)
-key("enter"); key("enter"); frames(2)
-for _ = 1, 10 do key("backspace") end
-type_text("home"); key("enter")
-check(shows("Built-in name"), "a built-in app name is refused")
+check(lastrun() == "apply install:gps", "store: Enter installs from Browse")
 key("esc")
-http.download = real_dl
-wifi.status = function() return "off" end
-cfg.set("wifi_ssid", nil)
-key("enter")
-check(shows("Settings > Wi-Fi"), "without Wi-Fi it explains what to do")
-wifi.status = function() return "connected" end
--- installed
+check(shows("Music") and shell.app() == "store", "store: Esc clears the search first")
 key("tab")
-check(shows("Demo") and shows("Web App"), "installed apps are listed")
-check(not shows("Calculator") and not shows("Task Manager"), "built-in apps are not listed")
-for _ = 1, 3 do key("up") end
-key("x")
-check(shows("Uninstall"), "X asks before removing")
-key("y")
-check(not sys.exists("apps/demo.lua"), "X removes the app")
-key("x"); key("y")
-check(not sys.exists("apps/webapp.lua") and shows("No apps installed"), "all installed apps removed")
+check(shows("Settings") and shows("Snake") and not shows("Editor"), "store: Installed lists your apps, not the editor")
+key("down"); key("x")  -- rows: Clock, Settings, Snake
+check(lastrun() == "apply install:gps" and not shows("Uninstall"), "store: system apps can't be uninstalled")
+key("down"); key("x"); key("y")
+check(lastrun() == "apply remove:snake", "store: X and confirm uninstalls")
+AS.result = "1 app installed"
+launch("store")
+check(shows("1 app installed"), "store: shows what the last run did")
+AS.result = "error: Wi-Fi isn't connected (Settings > Wi-Fi)"
+launch("store")
+check(shows("Wi-Fi isn't connected"), "store: shows errors")
 no_error("store")
 key("esc")
 check(shell.app() ~= "store" and shell.app() ~= "error", "Esc leaves the store (back to the previous app or home)")
