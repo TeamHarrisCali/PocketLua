@@ -260,7 +260,7 @@ static void osMain() {
       usbdev::log(String("previous run: main loop stuck 30 s at: ") + stuckAt + ", restarted");
       stuckMagic = 0;
     }
-    usbdev::log(String("LiveOS boot, storage=") + store::kind() + ", embedded files=" + (int)EMBEDDED_COUNT +
+    usbdev::log(String("PocketLua boot, build ") + (LIVEOS_BUILD + 8) + ", storage=" + store::kind() + ", embedded files=" + (int)EMBEDDED_COUNT +
                 ", board=" + (int)M5.getBoard() + (M5.getBoard() == m5::board_t::board_M5CardputerADV ? " (ADV)" : ""));
   }
   bool safe = false;

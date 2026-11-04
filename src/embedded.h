@@ -11,3 +11,7 @@ struct EmbFile {
 };
 extern const EmbFile EMBEDDED[];
 extern const size_t EMBEDDED_COUNT;
+
+// "PLBUILD:<git commit>[+]" (see gen_embed.py); the App Store compares the
+// part after the colon with the catalog's firmware build.
+extern const char LIVEOS_BUILD[];

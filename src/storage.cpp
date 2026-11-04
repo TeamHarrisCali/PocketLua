@@ -12,7 +12,7 @@ bool safeMode = false;
 static fs::FS *fsys = nullptr;
 static bool sdOk = false;
 static bool locked = false;
-static const char *ROOT = "/liveos";
+static const char *ROOT = "/pocketlua";
 
 // The card stays mounted; use() remounts it after USB sharing released it.
 static bool mounted = false;
@@ -25,6 +25,7 @@ static uint32_t lastUse = 0;
 static bool sdMount() { return SD.begin(12, SPI, 25000000, "/sd", 3); }
 
 static void scanOverrides();
+bool remove(const String &rel);
 
 // The filesystem, mounting the SD card first when needed.
 static fs::FS *use() {
@@ -126,6 +127,32 @@ static void scanOverrides() {
   if (b) b.close();
 }
 
+// One-time moves, done at boot: the folder was /liveos before the project
+// became PocketLua, and apps used to be single files (apps/<name>.lua); now
+// each app has its own folder (apps/<name>/main.lua and main.luac).
+static void migrate() {
+  if (!fsys->exists(ROOT) && fsys->exists("/liveos")) fsys->rename("/liveos", ROOT);
+  String apps = String(ROOT) + "/apps";
+  File d = fsys->open(apps);
+  if (!d || !d.isDirectory()) return;
+  std::vector<String> loose;
+  for (File e = d.openNextFile(); e; e = d.openNextFile()) {
+    String n = e.name();
+    int s = n.lastIndexOf('/');
+    if (s >= 0) n = n.substring(s + 1);
+    if (!e.isDirectory() && (n.endsWith(".lua") || n.endsWith(".luac"))) loose.push_back(n);
+    e.close();
+  }
+  d.close();
+  for (auto &n : loose) {
+    bool code = n.endsWith(".luac");
+    String name = n.substring(0, n.lastIndexOf('.'));
+    fsys->mkdir(apps + "/" + name);
+    String to = apps + "/" + name + (code ? "/main.luac" : "/main.lua");
+    if (!fsys->exists(to)) fsys->rename(apps + "/" + n, to);
+  }
+}
+
 bool begin() {
   SPI.begin(40, 39, 14, 12);
   // a few tries: after a crash the card can still be mid-transfer
@@ -144,6 +171,7 @@ bool begin() {
   } else {
     return false;
   }
+  migrate();
   if (!fsys->exists(ROOT)) fsys->mkdir(ROOT);
   scanOverrides();
   lastUse = millis();  // idleTick unmounts the card a few seconds after boot
@@ -164,6 +192,16 @@ bool inStorage(const String &rel) {
 }
 
 bool exists(const String &rel) { return inStorage(rel) || embedded(rel); }
+
+File openStored(const String &rel) {
+  bool systemFile = rel.startsWith("lib/") || rel == "boot.lua";
+  if ((safeMode && systemFile) || !inStorage(rel)) return File();
+  return fsys->open(realPath(rel), "r");
+}
+
+void rescan() {
+  if (use()) scanOverrides();
+}
 
 // Reads a whole file in blocks. (Stream::readString() waits a full second at
 // the end of every file, which stalls boot and can trip the script time limit.)
@@ -262,6 +300,8 @@ bool write(const String &rel, const String &data) {
     return false;
   }
   if (fsys->exists(p)) fsys->remove(p);
+  // An edited script wins over the bytecode the App Store installed with it.
+  if (rel.endsWith(".lua") && findOverride(rel + "c")) remove(rel + "c");
   if (fsys->rename(tmp, p)) {
     setOverride(rel, data.length());
     return true;

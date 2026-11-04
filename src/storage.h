@@ -3,7 +3,7 @@
 #include <FS.h>
 #include <vector>
 
-// Script storage. Files live under /liveos on the SD card (or internal flash
+// Script storage. Files live under /pocketlua on the SD card (or internal flash
 // when no card is present). Scripts shipped in the firmware are the fallback,
 // so a stored file always overrides the built-in one. Paths starting with
 // "sd:" address the raw card instead and never fall back to built-ins.
@@ -36,6 +36,13 @@ bool write(const String &rel, const String &data);
 bool append(const String &rel, const char *data, size_t len);
 bool rename(const String &from, const String &to);
 bool remove(const String &rel);
+// The card's copy of a script or file (an edited or App Store copy), opened
+// for reading in pieces; an empty File if there is none (or in safe mode for
+// system files).
+File openStored(const String &rel);
+// Re-reads which scripts the card overrides (after files were added outside
+// write()/remove(), e.g. by the App Store).
+void rescan();
 bool exists(const String &rel);
 bool inStorage(const String &rel);
 bool embedded(const String &rel);

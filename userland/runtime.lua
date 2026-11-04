@@ -23,9 +23,12 @@ function require(name)
   local path = "lib/" .. name .. ".lua"
   if not sys.exists(path) then error("module not found: " .. name, 2) end
   local stored = sys.in_storage(path) and not sys.safe_mode
+  -- an App Store copy (with bytecode) runs stripped; one edited on the device
+  -- keeps its debug info, so its errors show lines
+  local edited = stored and not sys.in_storage(path .. "c")
   collectgarbage("collect")
   local before = collectgarbage("count")
-  local fn, err = sys.loadfile(path, false, strip and not stored)
+  local fn, err = sys.loadfile(path, false, strip and not edited)
   if not fn and stored then
     fn = sys.loadfile(path, true, strip)
     if fn then shell.toast(path .. " has an error - using the built-in copy", 3) end

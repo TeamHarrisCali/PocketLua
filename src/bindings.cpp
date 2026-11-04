@@ -279,21 +279,54 @@ static int y_read_text(lua_State *L) {
 // when the file does not exist). loadfile(path, builtin_only, strip): strip
 // drops debug info (line numbers, local names), about 20% less RAM for code
 // that stays loaded.
+// Reads a file in 256-byte pieces for lua_load: a script on the card is never
+// copied whole into RAM.
+struct FileReader {
+  File f;
+  char buf[256];
+};
+static const char *readPiece(lua_State *, void *ud, size_t *size) {
+  FileReader *r = (FileReader *)ud;
+  int n = r->f.read((uint8_t *)r->buf, sizeof r->buf);
+  *size = n > 0 ? n : 0;
+  return r->buf;
+}
+
 bool loadChunk(lua_State *L, const String &path, bool builtinOnly, bool strip, String &err) {
-  String buf;
-  const char *p;
-  size_t n;
   err = "";
   String chunk = "@" + path;
+  auto loadFile = [&](const String &rel, const char *mode) -> int {  // 1 loaded, 0 no file, -1 error
+    FileReader r;
+    r.f = builtinOnly ? File() : store::openStored(rel);
+    if (!r.f) return 0;
+    int st = lua_load(L, readPiece, &r, chunk.c_str(), mode);
+    r.f.close();
+    if (st == LUA_OK) return 1;
+    err = lua_tostring(L, -1);
+    lua_pop(L, 1);
+    return -1;
+  };
+  // 1. a copy on the card: the App Store's bytecode (unless debug info is
+  //    wanted), else its or an edited source
+  if (strip && path.endsWith(".lua") && loadFile(path + "c", "b") == 1) return true;
+  int st = loadFile(path, "t");
+  if (st == 1) {
+    if (strip) lua_stripdebug(L);
+    return true;
+  }
+  if (st < 0) return false;
+  // 2. built into the firmware: precompiled bytecode (about half the RAM of
+  //    compiling), or the source when debug info is wanted
   const unsigned char *code;
   size_t codeLen;
-  // Built-ins load from precompiled bytecode (about half the RAM of compiling);
-  // with debug info wanted, or for an edited copy, from source.
-  if (strip && store::builtinCode(path, code, codeLen, builtinOnly)) {
+  if (strip && store::builtinCode(path, code, codeLen, true)) {
     if (luaL_loadbufferx(L, (const char *)code, codeLen, chunk.c_str(), "b") == LUA_OK) return true;
     lua_pop(L, 1);
   }
-  if (!store::view(path, buf, p, n, builtinOnly)) return false;
+  String buf;
+  const char *p;
+  size_t n;
+  if (!store::view(path, buf, p, n, true)) return false;
   if (luaL_loadbuffer(L, p, n, chunk.c_str()) != LUA_OK) {
     err = lua_tostring(L, -1);
     lua_pop(L, 1);

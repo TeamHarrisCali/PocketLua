@@ -14,12 +14,29 @@ proj = env["PROJECT_DIR"]  # noqa: F821
 root = os.path.join(proj, "userland")
 out = os.path.join(proj, "src", "embedded_files.gen.cpp")
 
+# Only the core is built in: the runtime every app needs, Settings (Wi-Fi has
+# to be set up before anything can be downloaded), the App Store, and the
+# editor the system opens for live editing and error screens. Every other app
+# and library comes from the App Store (tools/release.py). Apps are folders on
+# the device: userland/apps/<name>.lua is embedded as apps/<name>/main.lua.
+CORE_APPS = {"settings", "store", "edit"}
+CORE_LIBS = ("lib/settings/",)
+
 files = []
 for dirpath, _, names in os.walk(root):
     for name in names:
-        if name.endswith(".lua"):
-            full = os.path.join(dirpath, name)
-            files.append((os.path.relpath(full, root).replace(os.sep, "/"), full))
+        if not name.endswith(".lua"):
+            continue
+        full = os.path.join(dirpath, name)
+        rel = os.path.relpath(full, root).replace(os.sep, "/")
+        if rel.startswith("apps/"):
+            app = rel[5:-4]
+            if app not in CORE_APPS:
+                continue
+            rel = "apps/%s/main.lua" % app
+        elif rel.startswith("lib/") and not rel.startswith(CORE_LIBS):
+            continue
+        files.append((rel, full))
 files.sort()
 
 # the host compiler, rebuilt when its sources change
@@ -54,6 +71,19 @@ for i, (rel, full) in enumerate(files):
     lines.append('  {"%s", f%d, %d, %s, %d},' % (rel, i, os.path.getsize(full), "c%d" % i if codes[i] else "nullptr", codes[i]))
 lines.append("};")
 lines.append("const size_t EMBEDDED_COUNT = %d;" % len(files))
+
+# The build ID (git commit, "+" if the tree had changes): the App Store
+# compares it with the catalog's firmware line. Kept as "PLBUILD:<id>" so
+# tools/release.py can read it back out of a firmware file.
+def build_id():
+    try:
+        head = subprocess.run(["git", "rev-parse", "--short=8", "HEAD"], cwd=proj, capture_output=True, text=True).stdout.strip()
+        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no", "--", "src", "lib", "userland"],
+                               cwd=proj, capture_output=True, text=True).stdout.strip()
+        return (head or "unknown") + ("+" if dirty else "")
+    except OSError:
+        return "unknown"
+lines.append('const char LIVEOS_BUILD[] = "PLBUILD:%s";' % build_id())
 text = "\n".join(lines) + "\n"
 
 old = None

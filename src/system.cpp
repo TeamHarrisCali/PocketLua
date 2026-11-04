@@ -317,16 +317,20 @@ static String field(const String &t, const char *name) {
   return "";
 }
 
+// Each app is a folder: apps/<name>/main.lua (and main.luac from the App
+// Store), plus any files of its own.
+static String appFile(const String &name) { return "apps/" + name + "/main.lua"; }
+
 static void scanApps() {
   appsDirty = false;
   apps.clear();
   for (auto &e : store::list("apps")) {
-    if (e.dir || !e.name.endsWith(".lua")) continue;
-    String name = e.name.substring(0, e.name.length() - 4);
+    if (!e.dir) continue;
+    String name = e.name;
     String buf;
     const char *p;
     size_t n;
-    if (!store::view("apps/" + e.name, buf, p, n, false, 768)) continue;
+    if (!store::view(appFile(name), buf, p, n, false, 768)) continue;
     String head;
     head.concat(p, n);
     int a = head.indexOf("local app");
@@ -459,7 +463,7 @@ static void back() {
   while (!backStack.empty()) {
     String prev = backStack.back();
     backStack.pop_back();
-    if (prev != appName && store::exists("apps/" + prev + ".lua")) { launch(prev, "", 0, true); return; }
+    if (prev != appName && store::exists(appFile(prev))) { launch(prev, "", 0, true); return; }
   }
   if (screen == APP || screen == ERRSCREEN) {
     closeApp(true);
@@ -468,6 +472,10 @@ static void back() {
 }
 
 static void launch(const String &name, const String &path, int line, bool returning) {
+  if (!store::exists(appFile(name))) {  // apps come from the App Store
+    toast(name + " isn't installed: get it in the App Store", 3);
+    return;
+  }
   if (!returning && screen == APP && appName.length() && appName != name) {
     backStack.push_back(appName);
     if (backStack.size() > 4) backStack.erase(backStack.begin());
@@ -480,8 +488,11 @@ static void launch(const String &name, const String &path, int line, bool return
   if (!vm::open()) { fail(vm::lastError); return; }
   vmGen++;
   lua_State *L = vm::L;
-  String file = "apps/" + name + ".lua", e;
-  bool strip = cget("debug_sys") != "1" && !store::inStorage(file);
+  String file = appFile(name), e;
+  // Debug info is kept for a script edited on the device (its errors show
+  // lines). An App Store copy runs from its bytecode (main.luac); editing the
+  // source deletes that, so "has bytecode" means "unedited".
+  bool strip = cget("debug_sys") != "1" && (!store::inStorage(file) || store::inStorage(file + "c"));
   if (!loadChunk(L, file, false, strip, e)) { fail(e.length() ? e : "app not found: " + file); return; }
   if (!vm::call(0, 1)) { fail(vm::lastError); return; }
   if (!lua_istable(L, -1)) { lua_pop(L, 1); fail(file + ": app must return a table"); return; }
@@ -565,7 +576,7 @@ static void wake() {
 static int dockSel = 0;
 static std::vector<String> dock() {
   std::vector<String> out;
-  String d = cget("dock", "files,notes,clock,music,settings");
+  String d = cget("dock", "files,notes,clock,music,settings,store");
   int s = 0;
   while (s < (int)d.length() && out.size() < 5) {
     int e = d.indexOf(',', s);
@@ -722,7 +733,7 @@ static void newApp() {
     String name;
     for (char c : text) if (isalnum(c) || c == '_') name += (char)tolower(c);
     if (!name.length()) return;
-    String path = "apps/" + name + ".lua";
+    String path = appFile(name);
     if (store::exists(path)) { toast("Already exists: " + name); return; }
     char buf[900];
     snprintf(buf, sizeof buf, TEMPLATE, name.c_str(), name.c_str(), name.c_str());
@@ -741,7 +752,7 @@ static void drawerKey(const Key &k) {
     char c = tolower(k.text[0]);
     if (c == 'n') newApp();
     else if (c == 'e' && (folder >= 0 || query.length()) && drawerSel <= (int)list.size())
-      launch("edit", "apps/" + list[drawerSel - 1]->name + ".lua");
+      launch("edit", appFile(list[drawerSel - 1]->name));
     return;
   }
   if (key == "up" || (!query.length() && k.text && k.text[0] == ';')) drawerSel = max(1, drawerSel - 1);
@@ -775,7 +786,7 @@ static void desktopKey(const Key &k) {
     folder = -1;
     drawerSel = drawerTop = 1;
   } else if (k.ctrl && k.text && tolower(k.text[0]) == 'e' && dockSel < (int)d.size()) {
-    launch("edit", "apps/" + d[dockSel] + ".lua");
+    launch("edit", appFile(d[dockSel]));
   } else if (k.ctrl && k.text && tolower(k.text[0]) == 'n') {
     newApp();
   } else if (k.text && !k.ctrl && !k.fn && isalnum((unsigned char)k.text[0])) {
@@ -1498,14 +1509,16 @@ static int l_open_file(lua_State *L) {
   int dot = p.lastIndexOf('.');
   String ext = dot >= 0 ? p.substring(dot + 1) : "";
   ext.toLowerCase();
-  pendingApp = (ext == "wav" || ext == "mp3") ? "music" : (ext == "bmp" || ext == "jpg" || ext == "jpeg" || ext == "png") ? "images" : "edit";
+  String app = (ext == "wav" || ext == "mp3") ? "music" : (ext == "bmp" || ext == "jpg" || ext == "jpeg" || ext == "png") ? "images" : "edit";
+  if (!store::exists(appFile(app))) { toast("Get " + app + " from the App Store to open this"); return 0; }
+  pendingApp = app;
   pendingPath = p;
   pendingLine = 0;
   return 0;
 }
 static int l_run_file(lua_State *L) {
   String p = S(L, 1);
-  if (p.startsWith("apps/") && p.endsWith(".lua")) { pendingApp = p.substring(5, p.length() - 4); pendingPath = ""; }
+  if (p.startsWith("apps/") && p.endsWith("/main.lua")) { pendingApp = p.substring(5, p.length() - 9); pendingPath = ""; }
   else toast("Saved " + p);
   appsDirty = true;
   return 0;
