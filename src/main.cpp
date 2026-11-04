@@ -13,6 +13,7 @@
 #include "system.h"
 #include "usbdev.h"
 #include "vm.h"
+#include "syslog.h"
 
 // A quarter-screen frame buffer (16 KB instead of 65 KB): each frame is drawn
 // in four bands; g_bandY tells the drawing code which band it is.
@@ -220,6 +221,7 @@ static void osMain() {
   for (;;) {
     uint32_t t0 = millis();
     usbdev::tick();
+    syslog::drain();
     hwTick();
     if (millis() - lastHeapLog > 30000) {
       lastHeapLog = millis();
@@ -250,6 +252,7 @@ SET_LOOP_TASK_STACK_SIZE(20 * 1024);  // Lua C-call depth is capped (LUAI_MAXCCA
 
 void setup() {
   Serial.begin(115200);
+  syslog::begin();
   osMain();  // never returns
 }
 

@@ -1200,7 +1200,11 @@ static int storeCallback(lua_State *L, int idx) {
   return luaL_ref(L, LUA_REGISTRYINDEX);
 }
 
-static int l_toast(lua_State *L) { toast(luaL_tolstring(L, 1, nullptr), (float)luaL_optnumber(L, 2, 2)); return 0; }
+static int l_toast(lua_State *L) {
+  float secs = lua_isnumber(L, 2) ? (float)lua_tonumber(L, 2) : 2;  // lenient: some apps pass extra text
+  toast(luaL_tolstring(L, 1, nullptr), secs);
+  return 0;
+}
 static int l_alert(lua_State *L) { openDialog(DLG_ALERT, S(L, 1), OS(L, 2)); dlg.luaRef = storeCallback(L, 3); return 0; }
 static int l_confirm(lua_State *L) { openDialog(DLG_CONFIRM, S(L, 1), OS(L, 2)); dlg.luaRef = storeCallback(L, 3); return 0; }
 static int l_prompt(lua_State *L) {

@@ -291,13 +291,11 @@ bool wifiEnable(bool on) {
     usbdev::log(String("wifi start ") + (ok ? "ok" : "FAILED") + ": free before=" + before + " largest=" + largest +
                 " after=" + heap_caps_get_free_size(MALLOC_CAP_8BIT));
     if (!ok) {
-      // The core only says yes/no; ask the driver directly for the reason.
-      wifi_init_config_t c = WIFI_INIT_CONFIG_DEFAULT();
-      esp_err_t e = esp_wifi_init(&c);
-      usbdev::log(String("wifi diag: esp_wifi_init=") + esp_err_to_name(e) +
-                  " internal_free=" + heap_caps_get_free_size(MALLOC_CAP_INTERNAL) +
+      // Release whatever the failed start set up (the reason is in the log
+      // as "sys:" lines from the driver, see syslog.cpp).
+      usbdev::log(String("wifi diag: internal_free=") + heap_caps_get_free_size(MALLOC_CAP_INTERNAL) +
                   " dma_largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
-      if (e == ESP_OK) esp_wifi_deinit();
+      WiFi.mode(WIFI_OFF);
     }
     return ok;
   }
