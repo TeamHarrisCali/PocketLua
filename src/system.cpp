@@ -1063,7 +1063,10 @@ void begin(bool safeMode) {
   scanApps();
   conOn = !safe && cget("usb_console") == "1" && usbdev::serialOn();
   String ssid = cget("wifi_ssid");
-  if (!safe && ssid.length() && cget("wifi_auto") != "0") wifiStartSvc(ssid, cget("wifi_pass"), true);
+  bool autoOn = cget("wifi_auto") != "0";
+  usbdev::log(String("wifi at boot: saved network=") + (ssid.length() ? "yes" : "no") + " auto=" + (autoOn ? "on" : "off") +
+              (safe ? " (safe mode: skipped)" : ""));
+  if (!safe && ssid.length() && autoOn) wifiStartSvc(ssid, cget("wifi_pass"), true);
   if (safe) toast("Safe mode: no background services", 4);
   sound("boot");
 }

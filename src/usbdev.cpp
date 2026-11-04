@@ -5,6 +5,7 @@
 #include <USBMSC.h>
 #include <USBCDC.h>
 #include <SD.h>
+#include <FS.h>
 #include "storage.h"
 
 namespace usbdev {
@@ -37,8 +38,17 @@ static bool onStartStop(uint8_t, bool, bool) { return true; }
 
 void begin(bool keyboard, bool drive, bool serial, bool console, bool mouseWanted) {
   mainTask = xTaskGetCurrentTaskHandle();
-  // keep the file log small: start a fresh one each boot
-  store::write("data/log.txt", "");
+  // The log file survives reboots; it is rotated once it gets large.
+  {
+    String real;
+    fs::FS *fs = store::resolve("data/log.txt", real);
+    File f = fs ? fs->open(real) : File();
+    size_t size = f ? f.size() : 0;
+    if (f) f.close();
+    if (size > 48 * 1024) store::rename("data/log.txt", "data/log.old.txt");
+  }
+  const char *mark = "===== boot =====\n";
+  store::append("data/log.txt", mark, strlen(mark));
   consoleOn = console;
   msOn = mouseWanted;
   kOn = keyboard;
@@ -177,7 +187,7 @@ void tick() {
   if (now && !wasConnected) { pending = true; connectedAt = millis(); }
   // A host can ask for the backlog at any time by sending ENQ (0x05); the
   // connect edge alone is unreliable because other programs may open the port.
-  if (now && !consoleOn && cdc.available() && cdc.peek() == 0x05) {
+  if (cOn && !consoleOn && cdc.available() && cdc.peek() == 0x05) {
     cdc.read();
     pending = true;
     connectedAt = millis() - 1000;
@@ -185,7 +195,7 @@ void tick() {
   if (!now) pending = false;
   wasConnected = now;
   // give the host a moment to start reading before the backlog is sent
-  if (pending && millis() - connectedAt > 500 && !consoleOn) {
+  if (pending && millis() - connectedAt > 500 && !consoleOn && cOn) {
     pending = false;
     serialWrite("# --- log so far ---\n");
     int start = 0;

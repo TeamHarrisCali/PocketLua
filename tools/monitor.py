@@ -25,10 +25,14 @@ def main():
     attrs[4] = attrs[5] = termios.B115200
     attrs[6][termios.VMIN], attrs[6][termios.VTIME] = 0, 2
     termios.tcsetattr(fd, termios.TCSANOW, attrs)
-    # raise DTR so the device knows a terminal is listening and sends its log
-    fcntl.ioctl(fd, termios.TIOCMBIS, struct.pack('I', termios.TIOCM_DTR | termios.TIOCM_RTS))
+    # Drop and raise DTR/RTS: the device sees a fresh connection and resends its
+    # log backlog (more reliable than the ENQ request alone).
+    bits = struct.pack('I', termios.TIOCM_DTR | termios.TIOCM_RTS)
+    fcntl.ioctl(fd, termios.TIOCMBIC, bits)
+    time.sleep(0.5)
+    fcntl.ioctl(fd, termios.TIOCMBIS, bits)
     time.sleep(0.2)
-    os.write(fd, b"\x05")  # ask the device to resend its log backlog
+    os.write(fd, b"\x05")
     end = time.time() + a.seconds if a.seconds else None
     buf = b""
     print(f"reading {port} ...", file=sys.stderr)

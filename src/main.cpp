@@ -3,6 +3,7 @@
 // runs in a VM created only while the app is open (vm.cpp).
 // Runs as a normal app image, so M5Launcher can start it.
 #include <M5Cardputer.h>
+#include <WiFi.h>
 #include <esp_heap_caps.h>
 #include <Preferences.h>
 #include "bindings.h"
@@ -224,6 +225,8 @@ static void osMain() {
     if (millis() - lastHeapLog > 30000) {
       lastHeapLog = millis();
       logHeap("periodic");
+      usbdev::log(String("wifi: mode=") + (WiFi.getMode() == WIFI_OFF ? "off" : "on") +
+                  " connected=" + (WiFi.status() == WL_CONNECTED ? "yes" : "no"));
     }
     pollKeys();
     float dt = (t0 - last) / 1000.0f;
