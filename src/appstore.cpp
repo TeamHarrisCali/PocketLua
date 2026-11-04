@@ -609,6 +609,7 @@ bool sameAsBuiltin(const String &rel, const EmbFile &e) {
 // file edited on the device differs and has no .luac (saving deletes it), so
 // it stays.
 void cleanSystemCopies() {
+  store::rescan();  // early in boot the card's file list may not be read yet
   int n = 0;
   for (size_t i = 0; i < EMBEDDED_COUNT; i++) {
     String p = EMBEDDED[i].path;
