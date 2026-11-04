@@ -290,6 +290,7 @@ struct AppInfo {
   String name, title, icon, cat;
   uint16_t color;
   int order;
+  bool tls;  // makes HTTPS requests: open with a TLS buffer set aside (vm::open)
 };
 static std::vector<AppInfo> apps;
 static bool appsDirty = true;
@@ -339,6 +340,7 @@ static void scanApps() {
     if (!info.icon.length()) info.icon = "app";
     info.cat = field(t, "category");
     if (!info.cat.length()) info.cat = "tools";
+    info.tls = field(t, "tls") == "true";
     String o = field(t, "order");
     info.order = o.length() ? o.toInt() : 100;
     String c = field(t, "color");
@@ -475,7 +477,8 @@ static void launch(const String &name, const String &path, int line, bool return
   appTitle = name;
   if (const AppInfo *a = findApp(name)) appTitle = a->title;
   if (vm::arenaFree() < MIN_FREE_TO_OPEN) { fail("not enough memory to open " + name); return; }
-  if (!vm::open()) { fail(vm::lastError); return; }
+  const AppInfo *info = findApp(name);
+  if (!vm::open(info && info->tls)) { fail(vm::lastError); return; }
   vmGen++;
   lua_State *L = vm::L;
   String file = "apps/" + name + ".lua", e;

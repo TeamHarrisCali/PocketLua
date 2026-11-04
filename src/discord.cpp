@@ -37,13 +37,17 @@ void *tlsCalloc(size_t n, size_t size) {
   auto heap = [](size_t t) { return heap_caps_malloc(t, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); };
   void *p;
   if (!lend) p = heap(total);
-  else if (total >= 4096) { p = vm::arenaBorrow(total); if (!p) p = heap(total); }
+  else if (total >= 4096) {
+    p = vm::takeSlab(total);  // the block set aside when the app opened
+    if (!p) p = vm::arenaBorrow(total);
+    if (!p) p = heap(total);
+  }
   else { p = heap(total); if (!p) p = vm::arenaBorrow(total); }
   if (p) memset(p, 0, total);
   return p;
 }
 void tlsFree(void *p) {
-  if (!p) return;
+  if (!p || vm::giveSlab(p)) return;
   if (vm::inArena(p)) vm::arenaReturn(p);
   else heap_caps_free(p);
 }

@@ -121,9 +121,29 @@ bool call(int nargs, int nresults) {
   return true;
 }
 
-bool open() {
+// A block for a TLS record buffer, set aside when an app that declares
+// `tls = true` opens, while the arena is still empty: by the time the app
+// makes its first HTTPS request, Lua has broken the free space into pieces
+// smaller than the ~16.7 KB mbedTLS needs. Freed when the app closes.
+static const size_t TLS_SLAB = 17 * 1024;
+static void *slab = nullptr;
+static bool slabUsed = false;
+
+void *takeSlab(size_t n) {
+  if (!slab || slabUsed || n > TLS_SLAB) return nullptr;
+  slabUsed = true;
+  return slab;
+}
+bool giveSlab(void *p) {
+  if (!p || p != slab) return false;
+  slabUsed = false;
+  return true;
+}
+
+bool open(bool reserveTls) {
   close();
   used = 0;
+  if (reserveTls && arena) slab = multi_heap_malloc(arena, TLS_SLAB);
   L = lua_newstate(alloc, nullptr);
   if (!L) { lastError = "not enough memory"; return false; }
   luaL_requiref(L, "_G", luaopen_base, 1);
@@ -150,6 +170,9 @@ void close() {
   if (L) lua_close(L);
   L = nullptr;
   used = 0;
+  if (slab) multi_heap_free(arena, slab);
+  slab = nullptr;
+  slabUsed = false;
 }
 
 }  // namespace vm

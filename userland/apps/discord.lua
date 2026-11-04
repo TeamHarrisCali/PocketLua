@@ -4,7 +4,7 @@
 -- the background natively (src/discord.cpp); this only shows it.
 local col = ui.col
 
-local app = { title = "Discord", icon = "net", color = "blue", order = 33, category = "net" }
+local app = { title = "Discord", icon = "net", color = "blue", order = 33, category = "net", tls = true }
 app.help = {
   { "Type", "Write a message" },
   { "Enter", "Send / open" },

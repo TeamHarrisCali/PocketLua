@@ -20,8 +20,14 @@ void *arenaBorrow(size_t n);
 bool inArena(const void *p);
 void arenaReturn(void *p);
 size_t arenaLargest();
+// The reserved TLS block (once at a time), and giving it back: giveSlab is
+// false for any other pointer.
+void *takeSlab(size_t n);
+bool giveSlab(void *p);
 
-bool open();
+// reserveTls: set aside a block for a TLS record buffer first (apps with
+// `tls = true` in their header); see takeSlab.
+bool open(bool reserveTls = false);
 void close();
 // lua_pcall with the script time budget; on error sets lastError, pops it
 // and returns false.
