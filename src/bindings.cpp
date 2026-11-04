@@ -412,6 +412,11 @@ bool wifiEnable(bool on) {
   return true;
 }
 void wifiConnect(const char *ssid, const char *pass) {
+  // Many networks have several access points with the same name on different
+  // channels. Scan them all and join the strongest (the default fast scan
+  // takes the first one it finds).
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
   WiFi.begin(ssid, pass);
   wifiConnecting = true;
   wifiStart = millis();

@@ -29,7 +29,22 @@ local function scan_page()
     if poll > 0.4 then
       poll = 0
       local r = wifi.scan_result()
-      if r then nets, scanning = r, false end
+      if r then
+        -- one row per network name: strongest signal, and how many access points
+        local by, list = {}, {}
+        for _, n in ipairs(r) do
+          local g = by[n.ssid]
+          if not g then
+            g = { ssid = n.ssid, rssi = n.rssi, secure = n.secure, aps = 0 }
+            by[n.ssid] = g
+            list[#list + 1] = g
+          end
+          g.aps = g.aps + 1
+          if n.rssi > g.rssi then g.rssi = n.rssi end
+        end
+        table.sort(list, function(a, b) return a.rssi > b.rssi end)
+        nets, scanning = list, false
+      end
     end
   end
 
@@ -40,7 +55,7 @@ local function scan_page()
     for _, n in ipairs(nets) do
       rows[#rows + 1] = {
         label = n.ssid ~= "" and n.ssid or "(hidden)",
-        value = (n.secure and "* " or "") .. n.rssi,
+        value = (n.secure and "* " or "") .. n.rssi .. (n.aps and n.aps > 1 and (" x" .. n.aps) or ""),
         enter = function()
           if n.secure then
             shell.prompt("Password for " .. n.ssid, "", function(pw) if pw then connect(n.ssid, pw) end end, { secret = true })

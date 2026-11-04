@@ -1025,6 +1025,44 @@ static void conPoll() {
   if (conBuf.length() > 4096) conBuf = "";
 }
 
+// ================================================================ Wi-Fi roaming
+// When the signal gets weak, look for a clearly stronger access point with the
+// same network name (mesh, office and campus Wi-Fi) and move to it.
+static const int ROAM_BELOW = -72, ROAM_GAIN = 8;
+static int roamWait = 20;
+static bool roamScanning = false;
+
+static void roamTick() {
+  if (WiFi.status() != WL_CONNECTED) { roamScanning = false; return; }
+  if (roamScanning) {
+    int n = WiFi.scanComplete();
+    if (n == WIFI_SCAN_RUNNING) return;
+    roamScanning = false;
+    if (n <= 0) { WiFi.scanDelete(); return; }
+    String ssid = WiFi.SSID(), cur = WiFi.BSSIDstr();
+    int curRssi = WiFi.RSSI(), best = -1, bestRssi = curRssi + ROAM_GAIN;
+    for (int i = 0; i < n; i++)
+      if (WiFi.SSID(i) == ssid && WiFi.BSSIDstr(i) != cur && WiFi.RSSI(i) >= bestRssi) { best = i; bestRssi = WiFi.RSSI(i); }
+    if (best >= 0) {
+      uint8_t bssid[6];
+      memcpy(bssid, WiFi.BSSID(best), 6);
+      int ch = WiFi.channel(best);
+      usbdev::log(String("wifi roam: ") + cur + " (" + curRssi + ") -> " + WiFi.BSSIDstr(best) + " ch" + ch + " (" + bestRssi + ")");
+      WiFi.scanDelete();
+      WiFi.begin(ssid.c_str(), cget("wifi_pass").c_str(), ch, bssid);
+    } else {
+      WiFi.scanDelete();
+    }
+    return;
+  }
+  if (--roamWait > 0) return;
+  roamWait = 20;  // check every 20 s
+  if (WiFi.RSSI() < ROAM_BELOW && WiFi.scanComplete() != WIFI_SCAN_RUNNING) {
+    WiFi.scanNetworks(true);
+    roamScanning = true;
+  }
+}
+
 // ================================================================ services
 static bool synced = false, warnedLow = false;
 static float serviceAcc = 1;
@@ -1054,6 +1092,7 @@ static void services() {
     ui::status.time = "";
   }
   sleepAfter = cget("sleep", "60").toInt();
+  roamTick();
 }
 
 // ================================================================ entry points
