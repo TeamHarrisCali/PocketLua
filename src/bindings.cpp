@@ -347,33 +347,73 @@ static int y_list(lua_State *L) {
 }
 // list_names(dir [, "mp3,wav" [, max]]) -> sorted names as plain strings:
 // folders first with a "/" suffix, then files (only those extensions, if
-// given), at most max of them. Much smaller than list() for big folders such
-// as a music library.
+// given), at most max of them. Reads the folder on the card only (no built-in
+// files). Built for big folders such as a music library while MP3 playback
+// holds most of the heap: the names go into one growing buffer (~5 KB for
+// 200 names), every allocation is checked, and if memory runs out the list
+// is just shorter.
 static int y_list_names(lua_State *L) {
-  auto items = store::list(str(L, 1));
-  String exts = luaL_optstring(L, 2, "");
+  String real, exts = luaL_optstring(L, 2, "");
+  size_t max = (size_t)luaL_optinteger(L, 3, 0);
   exts.toLowerCase();
-  std::vector<String> dirs, files;
-  for (auto &e : items) {
-    if (e.dir) { dirs.push_back(e.name + "/"); continue; }
-    if (exts.length()) {
-      int dot = e.name.lastIndexOf('.');
-      String ext = dot >= 0 ? e.name.substring(dot + 1) : "";
-      ext.toLowerCase();
-      if (!ext.length() || ("," + exts + ",").indexOf("," + ext + ",") < 0) continue;
+  exts = "," + exts + ",";
+  fs::FS *fs = store::resolve(str(L, 1), real);
+  char *buf = nullptr;
+  uint32_t *at = nullptr;
+  size_t used = 0, cap = 0, n = 0, ncap = 0;
+  File d = fs ? fs->open(real) : File();
+  if (d && d.isDirectory()) {
+    for (File e = d.openNextFile(); e; e = d.openNextFile()) {
+      const char *name = e.name();
+      const char *slash = strrchr(name, '/');
+      if (slash) name = slash + 1;
+      bool dir = e.isDirectory();
+      e.close();
+      if (name[0] == '.') continue;
+      if (!dir && exts != ",,") {
+        const char *dot = strrchr(name, '.');
+        char ext[12] = ",";
+        if (!dot || strlen(dot + 1) > 8) continue;
+        for (size_t i = 0; dot[1 + i]; i++) ext[1 + i] = tolower((unsigned char)dot[1 + i]), ext[2 + i] = 0;
+        strcat(ext, ",");
+        if (exts.indexOf(ext) < 0) continue;
+      }
+      size_t len = strlen(name) + (dir ? 1 : 0) + 1;
+      if (used + len > cap) {
+        size_t c = cap ? cap * 2 : 2048;
+        while (c < used + len) c *= 2;
+        char *nb = (char *)realloc(buf, c);
+        if (!nb) break;
+        buf = nb, cap = c;
+      }
+      if (n == ncap) {
+        size_t c = ncap ? ncap * 2 : 64;
+        uint32_t *na = (uint32_t *)realloc(at, c * sizeof(uint32_t));
+        if (!na) break;
+        at = na, ncap = c;
+      }
+      at[n++] = used;
+      strcpy(buf + used, name);
+      if (dir) strcat(buf + used, "/");
+      used += len;
+      if (n >= 2000) break;
     }
-    files.push_back(e.name);
+    d.close();
   }
-  items.clear();
-  auto byName = [](const String &a, const String &b) { return strcasecmp(a.c_str(), b.c_str()) < 0; };
-  std::sort(dirs.begin(), dirs.end(), byName);
-  std::sort(files.begin(), files.end(), byName);
-  size_t max = (size_t)luaL_optinteger(L, 3, 0), count = dirs.size() + files.size();
-  if (max && count > max) count = max;
-  lua_createtable(L, count, 0);
-  size_t i = 0;
-  for (auto &n : dirs) { if (i == count) break; lua_pushstring(L, n.c_str()); lua_rawseti(L, -2, ++i); }
-  for (auto &n : files) { if (i == count) break; lua_pushstring(L, n.c_str()); lua_rawseti(L, -2, ++i); }
+  std::sort(at, at + n, [buf](uint32_t a, uint32_t b) {
+    const char *x = buf + a, *y = buf + b;
+    bool dx = x[strlen(x) - 1] == '/', dy = y[strlen(y) - 1] == '/';
+    if (dx != dy) return dx;
+    return strcasecmp(x, y) < 0;
+  });
+  if (max && n > max) n = max;
+  lua_createtable(L, n, 0);
+  for (size_t i = 0; i < n; i++) {
+    lua_pushstring(L, buf + at[i]);
+    lua_rawseti(L, -2, i + 1);
+  }
+  free(buf);
+  free(at);
   return 1;
 }
 

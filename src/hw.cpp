@@ -272,6 +272,9 @@ static void mp3Task(void *) {
     aSamples = aSamples + n;
     spkLastUse = millis();
     idx = (idx + 1) % 3;
+    // Always give up the CPU briefly: if decoding ever falls behind, the wait
+    // above never blocks and core 0's idle task (the watchdog's check) starves.
+    vTaskDelay(1);
   }
   if (aStop) M5Cardputer.Speaker.stop(0);
   while (M5Cardputer.Speaker.isPlaying(0)) vTaskDelay(2);

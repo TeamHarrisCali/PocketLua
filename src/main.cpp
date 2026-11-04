@@ -2,6 +2,7 @@
 // services) is native code in system.cpp; apps are live-editable Lua that
 // runs in a VM created only while the app is open (vm.cpp).
 // Runs as a normal app image, so M5Launcher can start it.
+#include <esp_system.h>
 #include <M5Cardputer.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
@@ -184,6 +185,21 @@ static void splash() {
 }
 
 
+// Why the last run ended, for the log: a crash shows up as PANIC or a watchdog.
+static const char *resetReason() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "power on";
+    case ESP_RST_SW: return "software restart";
+    case ESP_RST_PANIC: return "PANIC (crash)";
+    case ESP_RST_INT_WDT: return "INTERRUPT WATCHDOG";
+    case ESP_RST_TASK_WDT: return "TASK WATCHDOG";
+    case ESP_RST_WDT: return "WATCHDOG";
+    case ESP_RST_BROWNOUT: return "BROWNOUT (low power)";
+    case ESP_RST_DEEPSLEEP: return "deep sleep";
+    default: return "other";
+  }
+}
+
 static void osMain() {
   auto cfg = M5.config();
   cfg.internal_mic = true;  // configures the codec pins; started only when an app records
@@ -207,6 +223,7 @@ static void osMain() {
     bool console = cfgGet("usb_console", "0") == "1";
     bool mouse = cfgGet("usb_mouse", "0") == "1";
     usbdev::begin(kbd, drive, serial, console, mouse);
+    usbdev::log(String("reset reason: ") + resetReason());
     usbdev::log(String("LiveOS boot, storage=") + store::kind() + ", embedded files=" + (int)EMBEDDED_COUNT +
                 ", board=" + (int)M5.getBoard() + (M5.getBoard() == m5::board_t::board_M5CardputerADV ? " (ADV)" : ""));
   }
