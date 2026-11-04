@@ -13,6 +13,7 @@ bool loadChunk(lua_State *L, const String &path, bool builtinOnly, bool strip, S
 void playTone(uint16_t freq, uint32_t ms);
 void batteryInfo(int &pct, bool &charging);
 bool wifiEnable(bool on);
+size_t wifiStartCost();  // bytes the next Wi-Fi start is expected to take
 void wifiConnect(const char *ssid, const char *pass);
 void settingsTick();   // writes data/settings.txt after changes
 void settingsFlush();  // writes now (before a reboot)

@@ -503,6 +503,11 @@ static int c_set(lua_State *L) {
 // ---------------------------------------------------------------- wifi
 static bool wifiConnecting = false;
 static uint32_t wifiStart = 0;
+// What starting Wi-Fi costs, measured each time it starts or stops. The first
+// start at boot takes ~60 KB; turning it off gives back only ~36 KB (the
+// network stack stays), so a restart needs far less than the first start.
+static size_t wifiCost = 60 * 1024;
+size_t wifiStartCost() { return wifiCost; }
 
 // Returns whether the radio is now in the requested state. Starting it needs
 // ~40-50 KB, so Lua garbage is collected first and the outcome is logged.
@@ -514,8 +519,10 @@ bool wifiEnable(bool on) {
     bool modeOk = WiFi.mode(WIFI_STA);
     wifi_mode_t gm = WiFi.getMode();
     bool ok = modeOk && gm != WIFI_OFF;
+    size_t after = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    if (ok && before > after) wifiCost = before - after;
     usbdev::log(String("wifi start ") + (ok ? "ok" : "FAILED") + ": mode()=" + modeOk + " getMode=" + (int)gm +
-                " free before=" + before + " largest=" + largest + " after=" + heap_caps_get_free_size(MALLOC_CAP_8BIT));
+                " free before=" + before + " largest=" + largest + " after=" + after + " cost=" + wifiCost);
     if (!ok) {
       // WiFi.mode() only says yes/no. Ask the driver which step fails; these
       // calls do not tear anything down.
@@ -531,8 +538,12 @@ bool wifiEnable(bool on) {
     return ok;
   }
   wifiConnecting = false;
+  size_t before = heap_caps_get_free_size(MALLOC_CAP_8BIT);
   WiFi.disconnect(true);
   WiFi.mode(mesh::running() ? WIFI_STA : WIFI_OFF);  // device sharing needs the radio
+  size_t after = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+  if (WiFi.getMode() == WIFI_OFF && after > before + 8 * 1024) wifiCost = after - before;
+  usbdev::log(String("wifi stop: freed=") + (after > before ? after - before : 0) + " free=" + after);
   return true;
 }
 void wifiConnect(const char *ssid, const char *pass) {

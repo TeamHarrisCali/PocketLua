@@ -42,7 +42,7 @@ static bool safe = false;
 
 static const char *DEFAULT_TZ = "PST8PDT,M3.2.0,M11.1.0";
 static const size_t MIN_FREE_TO_OPEN = 28 * 1024;
-static const size_t MIN_FREE_FOR_WIFI = 72 * 1024;
+static const size_t WIFI_RESERVE = 12 * 1024;  // left over after Wi-Fi starts
 
 static size_t freeHeap() { return heap_caps_get_free_size(MALLOC_CAP_8BIT); }
 static String cget(const char *k, const char *d = "") { return cfgGet(k, d); }
@@ -546,9 +546,9 @@ static bool wifiStartSvc(const String &ssid, const String &pass, bool quiet) {
     hwReleaseAudio();
     if (vm::L) lua_gc(vm::L, LUA_GCCOLLECT);
     size_t f = freeHeap();
-    if (f < MIN_FREE_FOR_WIFI) {
+    if (f < wifiStartCost() + WIFI_RESERVE) {
       if (!quiet) toast(String("Not enough memory for Wi-Fi (") + (f / 1024) + "K free)", 4);
-      usbdev::log(String("wifi refused: free=") + f + " largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) +
+      usbdev::log(String("wifi refused: free=") + f + " needs=" + (wifiStartCost() + WIFI_RESERVE) + " largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) +
                   (screen == APP ? " app=" + appName : String("")));
       return false;
     }
