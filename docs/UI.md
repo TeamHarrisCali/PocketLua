@@ -51,7 +51,7 @@ The old names (`panel`, `panel2`, `dim`, `bar`) still work, but use the tokens a
 ## Behaviour rules
 
 - **Keys.** Arrows are Fn + `;` `.` `,` `/`. On screens without text input the bare `;` `.` `,` `/` keys also move (`ui.nav`). Enter selects. Esc goes back, and Esc on an app's top screen goes home (return `false` from `app.key`). Tab switches tabs. Ctrl+letter is for commands in text screens.
-- **Reserved keys.** Fn+Q, Fn+N, Fn+P, Fn+L and the G0 button belong to the system. Don't use them in apps.
+- **Reserved keys.** Fn+Q, Fn+N, Fn+P, Fn+L, Fn+H, Fn+- and Fn+= and the G0 button belong to the system. Don't use them in apps.
 - **Feedback.** Every action shows a result: a toast, a sound, or a visible change. Errors say what to do next ("Connect to Wi-Fi first").
 - **Drawing.** `draw()` must not change state. It runs once per screen band (three times per frame). Compute in `update(dt)` or `key(k)`.
 - **Files.** Everything PocketLua or an app writes goes under its own folder on the card (`/pocketlua/`): use PocketLua-relative paths like `data/<app>/...`. Never write to `sd:/...` outside `/pocketlua/`. The Files app may still browse the whole card.

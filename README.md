@@ -53,6 +53,7 @@ Store-only apps (not built into the firmware) go in `store/apps/`.
 | Fn+N | Notification center |
 | Fn+P | Screenshot, saved as a BMP in `data/screenshots` |
 | Fn+L | Lock screen |
+| Fn+`-` / Fn+`=` | Volume down / up, from anywhere |
 | Hold `S` at boot | Safe mode (built-in system only) |
 
 **Home screen:** Tab switches category (All, System, Tools, Media, Games, Net), typing searches, Enter opens, Ctrl+E edits the app's source, and Ctrl+N creates a new app.

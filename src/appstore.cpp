@@ -373,9 +373,13 @@ bool readCatalog(const std::function<void(Entry &)> &each, Firmware &fw) {
 
 String appPath(const String &name) { return "apps/" + name + "/main.lua"; }
 
-// installed | update | available, for an app or library entry
+// installed | update | available, for an app or library entry. System files
+// built into the firmware (Settings, the App Store, the editor, lib/settings)
+// update with the firmware, never as files: a card copy would hide the next
+// firmware's version.
 String status(const Entry &e) {
   String rel = e.kind == "app" ? appPath(e.name) : e.name;
+  if (store::embedded(rel)) return "installed";
   String have = localSha(rel);
   return !have.length() ? "available" : have == e.srcSha ? "installed" : "update";
 }
@@ -512,7 +516,7 @@ void apply(const String &ops) {
     if (what == "remove") { removes.push_back(name); continue; }
     if (what == "lib") { addLib(name); continue; }
     for (auto &e : cat) {
-      if (e.kind != "app" || e.name != name) continue;
+      if (e.kind != "app" || e.name != name || store::embedded(appPath(name))) continue;
       jobs.push_back({appPath(name), e.srcSize, e.srcSha});
       jobs.push_back({appPath(name) + "c", e.codeSize, e.codeSha});
       installs++;
@@ -583,6 +587,26 @@ void switchChannel(const String &to) {
   else result = "Now on " + String(to == "main" ? "Release" : "Beta") + "; everything was already the same";
 }
 
+// After a firmware change: copies of built-in system files that an App Store
+// or release install put on the card (a .lua with its .luac) are removed, so
+// the new firmware's own versions are used. A file edited on the device has
+// no .luac beside it (saving deletes it) and stays.
+void firmwareChanged() {
+  String now = POCKETLUA_BUILD + 8;
+  if (cfgGet("fw_seen") == now) return;
+  int n = 0;
+  for (size_t i = 0; i < EMBEDDED_COUNT; i++) {
+    String p = EMBEDDED[i].path;
+    if (!store::inStorage(p) || !store::inStorage(p + "c")) continue;
+    store::remove(p + "c");
+    store::remove(p);
+    n++;
+  }
+  if (n) store::rescan();
+  cfgSet("fw_seen", now);
+  usbdev::log("firmware " + now + ": " + n + " old card copies of system files removed");
+}
+
 // ---------------------------------------------------------------- Lua
 String pendingOp, pendingArg;
 
@@ -641,6 +665,9 @@ int l_channel(lua_State *L) {
 }
 
 }  // namespace
+
+// For the shell, at boot: drop stale card copies of system files.
+void appstoreBoot() { firmwareChanged(); }
 
 // For the shell: an operation the App Store asked for, run with no app open.
 bool appstorePending() { return pendingOp.length() > 0; }
