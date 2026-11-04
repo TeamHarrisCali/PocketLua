@@ -29,11 +29,16 @@ namespace {
 // ---------------------------------------------------------------- TLS memory
 volatile bool lend = false;  // borrow from the Lua arena (only during our requests)
 
+// Big blocks (the 16 KB record buffers) try the arena first and small ones the
+// heap first, so neither side's large free blocks get chipped away.
 void *tlsCalloc(size_t n, size_t size) {
   size_t total = n * size;
   if (size && total / size != n) return nullptr;
-  void *p = lend ? vm::arenaBorrow(total) : nullptr;
-  if (!p) p = heap_caps_malloc(total, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  auto heap = [](size_t t) { return heap_caps_malloc(t, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); };
+  void *p;
+  if (!lend) p = heap(total);
+  else if (total >= 4096) { p = vm::arenaBorrow(total); if (!p) p = heap(total); }
+  else { p = heap(total); if (!p) p = vm::arenaBorrow(total); }
   if (p) memset(p, 0, total);
   return p;
 }
@@ -185,9 +190,12 @@ int request(const char *method, const String &path, const String &body, Json &js
   c.setTimeout(10);
   lend = true;
   if (!c.connect("discord.com", 443)) {
+    char why[80] = "";
+    c.lastError(why, sizeof why);
     lend = false;
-    usbdev::log(String("discord: TLS connect failed, heap free=") + heap_caps_get_free_size(MALLOC_CAP_8BIT) +
-                " largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + " arena=" + vm::arenaFree());
+    usbdev::log(String("discord: TLS connect failed (") + why + "), heap free=" + heap_caps_get_free_size(MALLOC_CAP_8BIT) +
+                " largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + " arena free=" + vm::arenaFree() +
+                " largest=" + vm::arenaLargest());
     return -1;
   }
   String req = String(method) + " /api/v10" + path + " HTTP/1.0\r\nHost: discord.com\r\nAuthorization: Bot " + token +
@@ -351,12 +359,30 @@ void taskMain(void *) {
   vTaskDelete(nullptr);
 }
 
+// The task's stack (the TLS handshake runs on it) comes from the Lua arena
+// too: the heap's large blocks are needed for the record buffers.
+const size_t STACK_WORDS = 8192 / sizeof(StackType_t);
+StackType_t *stack = nullptr;
+StaticTask_t tcb;
+TaskHandle_t handle = nullptr;  // stays set until the stack can be returned
+
+void releaseStack() {
+  if (!stack) return;
+  if (handle && eTaskGetState(handle) != eDeleted) return;  // still running
+  vm::arenaReturn(stack);
+  stack = nullptr;
+  handle = nullptr;
+}
+
 bool ensureTask() {
   if (!mu) mu = xSemaphoreCreateMutex();
   if (task) return true;
+  releaseStack();
+  if (!stack) stack = (StackType_t *)vm::arenaBorrow(STACK_WORDS * sizeof(StackType_t));
+  if (!stack) return false;
   quit = false;
-  // 10 KB: the TLS handshake (certificate check, key exchange) runs here
-  return xTaskCreatePinnedToCore(taskMain, "discord", 10240, nullptr, 1, &task, 0) == pdPASS;
+  task = handle = xTaskCreateStaticPinnedToCore(taskMain, "discord", STACK_WORDS, nullptr, 1, stack, &tcb, 0);
+  return task != nullptr;
 }
 
 void start(Cmd c, const String &arg) {
@@ -444,6 +470,8 @@ int l_stop(lua_State *L) {
     xTaskNotifyGive(task);
     uint32_t t0 = millis();
     while (task && millis() - t0 < 12000) delay(20);
+    delay(20);  // let it finish vTaskDelete before its stack is returned
+    releaseStack();
     luaBudgetReset();
   }
   if (mu) {
@@ -461,6 +489,9 @@ int l_stop(lua_State *L) {
 }
 
 }  // namespace
+
+// True while a request runs: Wi-Fi roaming waits (its scans need heap too).
+bool discordBusy() { return lend; }
 
 extern const luaL_Reg discordFns[] = {{"ready", l_ready}, {"guilds", l_guilds}, {"channels", l_channels},
                                       {"list", l_list}, {"open", l_open}, {"send", l_send},

@@ -19,6 +19,7 @@ size_t arenaFree();
 void *arenaBorrow(size_t n);
 bool inArena(const void *p);
 void arenaReturn(void *p);
+size_t arenaLargest();
 
 bool open();
 void close();

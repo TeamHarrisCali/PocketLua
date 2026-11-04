@@ -23,6 +23,8 @@ extern M5Canvas canvas;
 
 using ui::col;
 
+bool discordBusy();  // discord.cpp: a TLS request is running and needs the heap
+
 namespace shell {
 
 // ================================================================ state
@@ -1224,8 +1226,10 @@ static const int ROAM_BELOW = -72, ROAM_GAIN = 8;
 static int roamWait = 20;
 static bool roamScanning = false;
 
+
 static void roamTick() {
   if (WiFi.status() != WL_CONNECTED) { roamScanning = false; return; }
+  if (::discordBusy() && !roamScanning) return;  // a Discord TLS request needs the heap
   if (roamScanning) {
     int n = WiFi.scanComplete();
     if (n == WIFI_SCAN_RUNNING) return;

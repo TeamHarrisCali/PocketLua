@@ -49,6 +49,12 @@ bool inArena(const void *p) {
   return arenaMem && p >= arenaMem && (const uint8_t *)p < (const uint8_t *)arenaMem + ARENA_SIZE;
 }
 void arenaReturn(void *p) { multi_heap_free(arena, p); }
+size_t arenaLargest() {
+  if (!arena) return 0;
+  multi_heap_info_t info;
+  multi_heap_get_info(arena, &info);
+  return info.largest_free_block;
+}
 
 size_t arenaFree() { return arena ? multi_heap_free_size(arena) : heap_caps_get_free_size(MALLOC_CAP_8BIT); }
 static const uint32_t CALL_BUDGET_MS = 2500;
