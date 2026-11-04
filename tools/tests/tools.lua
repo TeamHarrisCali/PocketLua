@@ -285,7 +285,9 @@ AS.result = "checked"
 launch("store")
 check(shows("Firmware abc12345") and shows("Clock") and not shows("Music"), "store: Updates lists firmware and newer apps")
 key("enter")
-check(lastrun() == "apply firmware", "store: Enter on the firmware downloads it")
+check(lastrun() == "check " and shows("restarts"), "store: Enter on the firmware asks first (it restarts)")
+key("y")
+check(lastrun() == "apply firmware", "store: yes downloads the firmware")
 key("down"); key("space"); key("enter")
 check(lastrun() == "apply install:clock", "store: Space marks, Enter installs what is marked")
 key("tab")
@@ -302,6 +304,14 @@ key("down"); key("x")  -- rows: Clock, Settings, Snake
 check(lastrun() == "apply install:gps" and not shows("Uninstall"), "store: system apps can't be uninstalled")
 key("down"); key("x"); key("y")
 check(lastrun() == "apply remove:snake", "store: X and confirm uninstalls")
+local function updates_tab()  -- the store reopens on the last tab
+  for _ = 1, 3 do if shows("Everything is up to date") or shows("Firmware abc12345") or shows("Clock") and not shows("Settings") then return end; key("tab") end
+end
+launch("store"); updates_tab()
+check(shows("Firmware abc12345"), "store: (control) a newer firmware is offered")
+AS.cat.firmware.status = "older"
+launch("store"); updates_tab()
+check(not shows("Firmware abc12345") and shows("Clock") and not shows("Settings"), "store: an older firmware is not offered")
 AS.result = "1 app installed"
 launch("store")
 check(shows("1 app installed"), "store: shows what the last run did")

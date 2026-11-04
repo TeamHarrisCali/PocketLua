@@ -14,7 +14,7 @@ Writes release/ in the repository, laid out like /pocketlua on the device:
 
 catalog.txt, one entry per line, fields separated by tabs:
   pocketlua-catalog 1
-  firmware  <build>  <size>  <sha256>
+  firmware  <build>  <size>  <sha256>  <commit time>
   app   <name>  core|app  <src size> <src sha256> <code size> <code sha256>  <title>  <category>  <icon>  <libs>  <description>
   lib   <path>  <src size> <src sha256> <code size> <code sha256>
 <libs> lists the libraries the app requires ("-" for none, else comma
@@ -72,7 +72,10 @@ def main():
         shutil.rmtree(OUT)
     os.makedirs(os.path.join(OUT, "apps"))
     shutil.copyfile(FIRMWARE, os.path.join(OUT, "PocketLua.bin"))
-    lines = ["pocketlua-catalog 1", "\t".join(["firmware", build, str(len(fw)), sha(fw)])]
+    # the commit time lets the device offer only a newer firmware
+    t = subprocess.run(["git", "show", "-s", "--format=%ct", build.rstrip("+")], cwd=ROOT,
+                       capture_output=True, text=True).stdout.strip() or "0"
+    lines = ["pocketlua-catalog 1", "\t".join(["firmware", build, str(len(fw)), sha(fw), t])]
 
     def add(src_path, rel):
         """Copies the source, compiles the bytecode; returns the size/hash fields."""

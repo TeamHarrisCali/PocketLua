@@ -1367,6 +1367,15 @@ void begin(bool safeMode) {
   if (!safe && ssid.length() && autoOn) wifiStartSvc(ssid, cget("wifi_pass"), true);
   if (safe) toast("Safe mode: no background services", 4);
   sound("boot");
+  // after a firmware update from the App Store: did the new build start?
+  String expect = cget("fw_expect");
+  if (expect.length()) {
+    cfgSet("fw_expect", "");
+    String now = POCKETLUA_BUILD + 8;
+    if (now.startsWith(expect)) notify("Firmware updated", "Now on build " + expect);
+    else notify("Firmware update undone", "Build " + expect + " didn't start; back on " + now);
+    usbdev::log("firmware update to " + expect + (now.startsWith(expect) ? ": running" : ": rolled back to " + now));
+  }
 }
 
 void setHold(bool on) { appHold = on; }

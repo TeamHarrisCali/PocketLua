@@ -1,8 +1,10 @@
 // PocketLua for the Cardputer ADV. The OS itself (desktop, drawer, system UI,
 // services) is native code in system.cpp; apps are live-editable Lua that
 // runs in a VM created only while the app is open (vm.cpp).
-// Runs as a normal app image, so M5Launcher can start it.
+// Flashed directly (pio run -t upload) and updated by the App Store into the
+// spare app slot; still a normal app image, so M5Launcher can also start it.
 #include <esp_system.h>
+#include <esp_ota_ops.h>
 #include <M5Cardputer.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
@@ -54,6 +56,22 @@ static void watchMain(void *) {
       stuckMagic = STUCK;
       esp_restart();
     }
+  }
+}
+
+// Firmware updates (App Store): a new build boots "pending verify" and is
+// marked good once its main loop has run for 10 s. If it crashes or hangs
+// before that, the next reset boots the previous build again. (Arduino would
+// mark it good as soon as it starts.)
+extern "C" bool verifyRollbackLater() { return true; }
+static void markFirmwareGood() {
+  static bool done = false;
+  if (done || millis() < 10000) return;
+  done = true;
+  esp_ota_img_states_t st;
+  if (esp_ota_get_state_partition(esp_ota_get_running_partition(), &st) == ESP_OK && st == ESP_OTA_IMG_PENDING_VERIFY) {
+    esp_ota_mark_app_valid_cancel_rollback();
+    usbdev::log("firmware update: the new build runs, marked good");
   }
 }
 
@@ -288,6 +306,7 @@ static void osMain() {
     settingsTick();
     g_crumb = "hw tick";
     hwTick();
+    markFirmwareGood();
     if (millis() - lastHeapLog > 30000) {
       lastHeapLog = millis();
       logHeap("periodic");

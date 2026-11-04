@@ -15,3 +15,4 @@ extern const size_t EMBEDDED_COUNT;
 // "PLBUILD:<git commit>[+]" (see gen_embed.py); the App Store compares the
 // part after the colon with the catalog's firmware build.
 extern const char POCKETLUA_BUILD[];
+extern const long POCKETLUA_BUILD_TIME;  // commit time (Unix seconds)

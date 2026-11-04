@@ -7,11 +7,15 @@
 // progress screen, and reopens it (appstore.result says how it went).
 //
 // Every file is checked against its SHA-256 from the catalog before it
-// replaces anything; the previous copy is kept as <file>.bak.
+// replaces anything; the previous copy is kept as <file>.bak. The firmware is
+// written into the spare app slot of the flash and checked the same way before
+// the device restarts into it; if the new firmware fails to start, the
+// bootloader goes back to the old one (see markFirmwareGood in main.cpp).
 #include <Arduino.h>
 #include <M5Cardputer.h>
 #include <WiFi.h>
 #include <errno.h>
+#include <esp_ota_ops.h>
 #include <esp_random.h>
 #include <lwip/sockets.h>
 #include <time.h>
@@ -305,6 +309,11 @@ bool download(const String &rel, long size, const String &sha, String &err, int 
 }
 
 // ---------------------------------------------------------------- catalog
+struct Firmware {
+  String build, sha;
+  long size = 0, time = 0;  // time: the build's commit time, 0 if the catalog has none
+};
+
 struct Entry {
   String kind, name, flag, srcSha, codeSha, title, cat, icon, libs, desc;
   long srcSize = 0, codeSize = 0;
@@ -313,8 +322,8 @@ struct Entry {
 // Parses catalog.txt line by line from the card and hands each app or library
 // to `each` (no copy of the whole file, and no list of every entry: after
 // Music and a Wi-Fi restart the heap's largest block can be under 10 KB, and
-// a failed allocation in C++ is a crash); firmware fills build/size/sha.
-bool readCatalog(const std::function<void(Entry &)> &each, String &fwBuild, long &fwSize, String &fwSha) {
+// a failed allocation in C++ is a crash); fills fw from the firmware line.
+bool readCatalog(const std::function<void(Entry &)> &each, Firmware &fw) {
   File file = store::openStored(CATALOG);
   if (!file) return false;
   String line;
@@ -329,7 +338,10 @@ bool readCatalog(const std::function<void(Entry &)> &each, String &fwBuild, long
       if (t < 0) break;
       s = t + 1;
     }
-    if (f[0] == "firmware" && f.size() >= 4) { fwBuild = f[1]; fwSize = f[2].toInt(); fwSha = f[3]; }
+    if (f[0] == "firmware" && f.size() >= 4) {
+      fw.build = f[1]; fw.size = f[2].toInt(); fw.sha = f[3];
+      fw.time = f.size() >= 5 ? f[4].toInt() : 0;
+    }
     else if (f[0] == "app" && f.size() >= 12) {
       Entry e;
       e.kind = "app"; e.name = f[1]; e.flag = f[2];
@@ -370,8 +382,65 @@ String running() {
   return b;
 }
 
+// installed | update | older: only a newer build is offered (a development
+// build on the device is often newer than the release)
+String fwStatus(const Firmware &fw) {
+  if (fw.build == running()) return "installed";
+  return fw.time > POCKETLUA_BUILD_TIME ? "update" : "older";
+}
+
+// Downloads the firmware into the spare app slot, checking its size and
+// SHA-256 (and ESP-IDF checks the image), then makes it the one to boot.
+bool flashFirmware(const Firmware &fw, String &err, int pct) {
+  const esp_partition_t *part = esp_ota_get_next_update_partition(nullptr);
+  if (!part) { err = "no spare firmware slot (flash with the OTA partition table)"; return false; }
+  if (fw.size <= 0 || (size_t)fw.size > part->size) { err = "the firmware doesn't fit its slot"; return false; }
+  for (int attempt = 0; attempt < 2; attempt++) {  // again once if the connection drops
+    esp_ota_handle_t h;
+    esp_err_t e = esp_ota_begin(part, OTA_WITH_SEQUENTIAL_WRITES, &h);  // erases as it goes
+    if (e != ESP_OK) { err = String("can't start the update (") + esp_err_to_name(e) + ")"; return false; }
+    br_sha256_context c;
+    br_sha256_init(&c);
+    long got = 0;
+    uint32_t shown = 0;
+    bool wrote = true;
+    int st = get("PocketLua.bin", [&](const uint8_t *p, size_t n) {
+      if (got + (long)n > fw.size) return false;  // longer than the catalog says
+      br_sha256_update(&c, p, n);
+      got += n;
+      if (millis() - shown > 300) {
+        shown = millis();
+        progress("Firmware  " + String(got / 1024) + " / " + String(fw.size / 1024) + " KB", pct);
+      }
+      if (esp_ota_write(h, p, n) != ESP_OK) wrote = false;
+      return wrote;
+    }, err);
+    uint8_t out[32];
+    br_sha256_out(&c, out);
+    if (st == 200 && wrote && got == fw.size && hex(out, 32) == fw.sha) {
+      e = esp_ota_end(h);
+      if (e == ESP_OK) e = esp_ota_set_boot_partition(part);
+      if (e == ESP_OK) {
+        usbdev::log(String("store: firmware ") + fw.build + " written to " + part->label);
+        return true;
+      }
+      err = String("the new firmware failed its check (") + esp_err_to_name(e) + ")";
+      return false;
+    }
+    esp_ota_abort(h);
+    if (st > 0 && st != 200) { err = String("firmware: GitHub answered ") + st; return false; }
+    if (!wrote) { err = "firmware: writing the flash failed"; return false; }
+    if (st == 200 && got == fw.size) { err = "firmware: download didn't match its checksum"; return false; }
+    if (st == 200) err = "firmware: connection dropped";
+    usbdev::log("store: firmware got " + String(got) + " of " + String(fw.size) + " bytes, " +
+                (attempt ? "giving up" : "trying again"));
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------- operations
 String result;  // what the last operation did, for the App Store app
+String restartInto;  // a firmware build that was just written: restart into it
 
 bool ready(String &err) {
   if (WiFi.status() != WL_CONNECTED) { err = "Wi-Fi isn't connected (Settings > Wi-Fi)"; return false; }
@@ -406,12 +475,12 @@ void check() {
 // ops: "install:<app>,remove:<app>,firmware"
 void apply(const String &ops) {
   std::vector<Entry> cat;  // only the apps named in ops, and the libraries
-  String fwBuild, fwSha, err;
-  long fwSize = 0;
+  Firmware fw;
+  String err;
   String wanted = "," + ops + ",";
   if (!readCatalog([&](Entry &e) {
         if (e.kind == "lib" || wanted.indexOf(":" + e.name + ",") >= 0) cat.push_back(e);
-      }, fwBuild, fwSize, fwSha)) { result = "error: check for updates first"; return; }
+      }, fw)) { result = "error: check for updates first"; return; }
   if (!ready(err)) { result = "error: " + err; return; }
   // the files to fetch: each app's source and bytecode, plus its libraries
   struct Job { String rel; long size; String sha; };
@@ -458,9 +527,11 @@ void apply(const String &ops) {
     if (!download(j.rel, j.size, j.sha, err, pct)) { failed++; if (!firstErr.length()) firstErr = err; }
     done++;
   }
+  bool restart = false;
   if (firmware) {
-    progress("Getting the firmware (" + String(fwSize / 1024) + " KB)", total ? done * 100 / total : 0);
-    if (!download("PocketLua.bin", fwSize, fwSha, err, 100 * done / total)) { failed++; if (!firstErr.length()) firstErr = err; }
+    progress("Getting the firmware (" + String(fw.size / 1024) + " KB)", total ? done * 100 / total : 0);
+    if (flashFirmware(fw, err, 100 * done / total)) { restart = true; restartInto = fw.build; }
+    else { failed++; if (!firstErr.length()) firstErr = err; }
   }
   for (auto &name : removes) {
     // the app's folder: main.lua, main.luac, backups and any files of its own
@@ -474,7 +545,7 @@ void apply(const String &ops) {
   String msg;
   if (installs) msg += String(installs) + (installs == 1 ? " app installed" : " apps installed");
   if (removes.size()) msg += String(msg.length() ? ", " : "") + removes.size() + " removed";
-  if (firmware && !failed) msg += String(msg.length() ? ". " : "") + "Firmware saved: install PocketLua.bin from M5Launcher";
+  if (restart) msg += String(msg.length() ? ". " : "") + "Firmware " + fw.build + " installed";
   result = failed ? "error: " + String(failed) + " failed: " + firstErr : (msg.length() ? msg : String("Nothing to do"));
 }
 
@@ -485,8 +556,7 @@ String pendingOp, pendingArg;
 // category=, icon=, desc=, size=, core=, status=}, ...}} from the last catalog,
 // or nil if there is none yet.
 int l_list(lua_State *L) {
-  String fwBuild, fwSha;
-  long fwSize = 0;
+  Firmware fw;
   lua_newtable(L);
   lua_newtable(L);  // apps, filled as the catalog is read
   int n = 0;
@@ -503,14 +573,14 @@ int l_list(lua_State *L) {
     lua_pushstring(L, status(e).c_str()); lua_setfield(L, -2, "status");
     lua_rawseti(L, -2, ++n);
     feedWatch();
-  }, fwBuild, fwSize, fwSha);
+  }, fw);
   if (!ok) { lua_pop(L, 2); return 0; }
   lua_setfield(L, -2, "apps");
   lua_createtable(L, 0, 4);
-  lua_pushstring(L, fwBuild.c_str()); lua_setfield(L, -2, "build");
+  lua_pushstring(L, fw.build.c_str()); lua_setfield(L, -2, "build");
   lua_pushstring(L, running().c_str()); lua_setfield(L, -2, "running");
-  lua_pushinteger(L, fwSize); lua_setfield(L, -2, "size");
-  lua_pushstring(L, fwBuild == running() ? "installed" : "update"); lua_setfield(L, -2, "status");
+  lua_pushinteger(L, fw.size); lua_setfield(L, -2, "size");
+  lua_pushstring(L, fwStatus(fw).c_str()); lua_setfield(L, -2, "status");
   lua_setfield(L, -2, "firmware");
   return 1;
 }
@@ -548,6 +618,14 @@ void appstoreRun() {
   else if (op == "apply") apply(arg);
   freeTls();
   usbdev::log("store: " + result);  // every outcome, including "Wi-Fi isn't connected"
+  if (restartInto.length()) {
+    // the shell says after the restart whether the new build started
+    cfgSet("fw_expect", restartInto);
+    settingsFlush();
+    progress("Restarting into firmware " + restartInto, 100);
+    delay(1500);
+    ESP.restart();
+  }
 }
 
 extern const luaL_Reg appstoreFns[] = {{"list", l_list}, {"run", l_run}, {"result", l_result},

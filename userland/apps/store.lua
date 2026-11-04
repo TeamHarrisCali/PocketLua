@@ -97,7 +97,7 @@ function app.draw()
     if type(info) == "table" then
       ui.text(6, 93, ui.fit(info.desc ~= "" and info.desc or info.category, 228), col.muted)
     elseif info == "firmware" then
-      ui.text(6, 93, ui.fit("Saved to the card: install PocketLua.bin from M5Launcher", 228), col.muted)
+      ui.text(6, 93, ui.fit("Restarts when done; a build that fails to start is undone", 228), col.muted)
     end
   end
   local status = query ~= "" and ("Search: " .. query) or note
@@ -125,7 +125,16 @@ function app.key(k)
     if tab == 3 then
       if type(it) == "table" then shell.launch(it.name) end
     elseif it then
-      apply(chosen("install"))
+      local ops = chosen("install")
+      local fw = false
+      for _, o in ipairs(ops) do fw = fw or o == "firmware" end
+      if fw then
+        shell.confirm("Firmware", "Install build " .. cat.firmware.build .. "? The Cardputer restarts.", function(yes)
+          if yes then apply(ops) end
+        end)
+      else
+        apply(ops)
+      end
     end
   elseif tab == 2 and c and c:match("^[%w]$") and c ~= "c" or (tab == 2 and query ~= "" and c and c:match("^[%w ]$")) then
     query = query .. c

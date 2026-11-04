@@ -83,7 +83,15 @@ def build_id():
         return (head or "unknown") + ("+" if dirty else "")
     except OSError:
         return "unknown"
+# The commit's time: the App Store offers a firmware only if it is newer.
+def build_time():
+    try:
+        t = subprocess.run(["git", "show", "-s", "--format=%ct", "HEAD"], cwd=proj, capture_output=True, text=True).stdout.strip()
+        return int(t or 0)
+    except (OSError, ValueError):
+        return 0
 lines.append('const char POCKETLUA_BUILD[] = "PLBUILD:%s";' % build_id())
+lines.append("const long POCKETLUA_BUILD_TIME = %dL;" % build_time())
 text = "\n".join(lines) + "\n"
 
 old = None
