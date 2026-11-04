@@ -364,8 +364,10 @@ void taskMain(void *) {
     else if (channel.length() && (int32_t)(millis() - nextPoll) >= 0) poll();
     else ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(200));
   }
-  Lock l;
-  task = nullptr;
+  {
+    Lock l;  // released before the task ends: a task that deletes itself never runs the unlock
+    task = nullptr;
+  }
   vTaskDelete(nullptr);
 }
 
