@@ -351,7 +351,7 @@ end
 
 local function draw_playing()
   if not np then
-    ui.empty("music", "Nothing playing", lib and "Pick something from the lists" or "Put MP3s in /liveos/data/music")
+    ui.empty("music", "Nothing playing", lib and "Pick something from the lists" or "Put MP3s in /pocketlua/data/music")
     ui.footer({ { "Esc", "Lists" } })
     return
   end

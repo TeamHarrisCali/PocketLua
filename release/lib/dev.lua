@@ -1,4 +1,4 @@
--- Networked devices: use another LiveOS device's hardware as if it were yours.
+-- Networked devices: use another PocketLua device's hardware as if it were yours.
 --   local d = dev.mount("kitchen")      -- a nearby device, by name
 --   d.snd.tone(880, 300)                -- plays a tone on that device
 --   d.imu.read(function(r, err) ... end) -- results arrive in a callback
@@ -13,7 +13,7 @@ local PEER_TTL = 12000   -- ms without a beacon before a device drops off
 local CALL_TIMEOUT = 2500
 local BEACON_EVERY = 3000
 
-dev.name = cfg.get("dev_name") or ("liveos-" .. net.mac():sub(-4))
+dev.name = cfg.get("dev_name") or ("pocketlua-" .. net.mac():sub(-4))
 dev.peers_by_mac = {}
 dev.exports = {}
 
@@ -188,7 +188,7 @@ function dev.start()
   if not key or key == "" then return false, "set a network key first" end
   if not net.start(key) then return false, "radio failed to start" end
   my_mac = net.mac()
-  dev.name = clean(cfg.get("dev_name") or ("liveos-" .. my_mac:sub(-4)))
+  dev.name = clean(cfg.get("dev_name") or ("pocketlua-" .. my_mac:sub(-4)))
   running = true
   last_beacon = -BEACON_EVERY
   return true

@@ -6,7 +6,7 @@ local push, pop, cycle, num = ctx.push, ctx.pop, ctx.cycle, ctx.num
 local function devices_page()
   -- Only Nearby needs the device-sharing module; this page just edits settings.
   local p = { title = "Devices" }
-  local function name() return cfg.get("dev_name") or ("liveos-" .. net.mac():sub(-4)) end
+  local function name() return cfg.get("dev_name") or ("pocketlua-" .. net.mac():sub(-4)) end
   local function ask(title, key, secret)
     shell.prompt(title, secret and "" or (cfg.get(key) or ""), function(text)
       if text and text ~= "" then cfg.set(key, text); shell.dev_restart() end

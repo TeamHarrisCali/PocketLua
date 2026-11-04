@@ -17,7 +17,7 @@ function app.update(dt)
 end
 
 function app.draw()
-  ui.center(48, "Hello, LiveOS!", col.text, 2)
+  ui.center(48, "Hello, PocketLua!", col.text, 2)
   ui.center(72, "keys pressed: " .. presses, col.dim, 1)
   gfx.disc(x, y, 5, col.accent)
 end
