@@ -146,12 +146,16 @@ sys.write_text("data/music/a_song.wav", "RIFF")
 sys.write_text("data/music/b_song.wav", "RIFF")
 sys.write_text("data/music/c_song.MP3", "ID3")
 sys.write_text("data/music/notes.txt", "x")
+sys.mkdirs("data/music/Artist/Album")
+sys.write_text("data/music/Artist/Album/01 First.mp3", "ID3")
+sys.write_text("data/music/Artist/Album/02 Second.mp3", "ID3")
 shell.launch("music"); frames(3)
 alive("music", "launches")
 check(shell.focused, "music: turns on focus mode")
 s, f = screen()
-check(has(s, "a_song.wav") and has(s, "b_song.wav") and has(s, "c_song.MP3") and not has(s, "notes.txt") and f,
-  "music: lists MP3 and WAV files only")
+check(has(s, "Artist") and has(s, "a_song") and has(s, "b_song") and has(s, "c_song") and not has(s, "notes") and f,
+  "music: lists folders, MP3 and WAV files only")
+key("down")  -- past the Artist folder
 key("enter")
 check(last("play")[2] == "data/music/a_song.wav", "music: Enter plays the selection")
 key("right")
@@ -165,13 +169,25 @@ A.state = "idle"; frames(40)
 check(count("play") == plays + 1 and last("play")[2] == "data/music/b_song.wav", "music: advances when a track ends")
 key("enter")
 check(A.state == "idle", "music: Enter stops the playing track")
+for _ = 1, 3 do key("up") end
+key("enter")
+s = screen()
+check(has(s, "Artist") and has(s, "Album") and not has(s, "a_song"), "music: Enter opens a folder")
+key("enter")
+check(has(screen(), "First") and has(screen(), "Second"), "music: shows the album's tracks")
+key("enter")
+check(last("play")[2] == "data/music/Artist/Album/01 First.mp3", "music: plays a track in a subfolder")
+A.state = "idle"; frames(40)
+check(last("play")[2] == "data/music/Artist/Album/02 Second.mp3", "music: the album plays on in order")
+key("esc"); key("esc")
+check(shell.app() == "music" and has(screen(), "a_song"), "music: Esc goes up to the top folder")
 local v0 = tonumber(cfg.get("vol")) or 100
 key("=")
 check(tonumber(cfg.get("vol")) > v0 and last("volume")[2] == tonumber(cfg.get("vol")), "music: = raises the volume")
 key("-"); key("-")
 check(tonumber(cfg.get("vol")) < v0, "music: - lowers the volume")
 A.fail = "not a 16-bit PCM WAV"
-key("enter")
+key("down"); key("enter")
 check(toasts[#toasts] == "not a 16-bit PCM WAV", "music: a play failure is shown as a toast")
 alive("music", "survives a play failure")
 A.fail = nil
@@ -179,16 +195,15 @@ for _, k in ipairs({ "down", "down", "up", "esc" }) do key(k) end
 check(shell.app() == "home", "music: Esc goes home")
 shell.open_file("sd:/other/song.wav"); frames(2)
 check(shell.app() == "music" and last("play")[2] == "sd:/other/song.wav", "music: open_file plays the file at once")
-check(has(screen(), "song.wav"), "music: the opened file is in the list")
+check(has(screen(), "song"), "music: the opened file is in the list")
 shell.home(); frames(2)
-sys.remove("data/music/a_song.wav"); sys.remove("data/music/b_song.wav")
-sys.storage = function() return "FLASH", 1000000, 1000 end
+for _, n in ipairs({ "a_song.wav", "b_song.wav", "c_song.MP3", "notes.txt", "Artist/Album/01 First.mp3",
+  "Artist/Album/02 Second.mp3", "Artist/Album", "Artist" }) do sys.remove("data/music/" .. n) end
 shell.launch("music"); frames(2)
 s, f = screen()
 check(has(s, "No music found") and f, "music: empty state without files")
 key("enter"); key("right")
 alive("music", "keys with no tracks")
-sys.storage = real_storage
 shell.home(); frames(2)
 
 -- ------------------------------------------------------------ sound lab

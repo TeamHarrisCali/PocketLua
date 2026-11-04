@@ -1,20 +1,23 @@
--- Music: play MP3 and WAV files from data/music and your recordings. Opens
--- .mp3 and .wav files from Files too. Enter plays/stops, left/right skip,
--- - and = set the volume. Wi-Fi is off while Music is open (focus mode): the
--- MP3 decoder needs that RAM. It comes back on when Music closes.
+-- Music: play MP3 and WAV files from data/music, sorted in folders (for
+-- example Artist/Album/track.mp3), and your recordings. Enter opens a folder or
+-- plays a track; the rest of that folder plays after it. Esc goes up a folder.
+-- Left/right skip, - and = set the volume. Opens .mp3 and .wav files from Files
+-- too. Wi-Fi is off while Music is open (focus mode): the MP3 decoder needs
+-- that RAM. It comes back on when Music closes.
 local col = ui.col
 
 local app = { title = "Music", icon = "music", color = "pink", order = 41, category = "media" }
 
-local MAX_TRACKS = 120
+local ROOT, RECORDINGS = "data/music", "data/recordings"
+local MAX_ENTRIES = 150       -- per folder; only the folder on screen is in memory
 
-local tracks, rows = {}, {}   -- full paths; list rows
+local dir = ROOT              -- folder on screen
+local entries, rows = {}, {}  -- entries: { path, dir = bool }
 local sel, top = 1, 1
-local cur = nil               -- index of the track that is playing (or last played)
+local queue, cur = {}, nil    -- tracks of the folder playback started in; index playing
 local playing, grace = false, 0
 local done, total = 0, 0
 local vol = 100
-local sd = false
 
 local function mmss(s)
   s = math.floor(s or 0)
@@ -22,40 +25,45 @@ local function mmss(s)
 end
 
 local function base(p) return p:match("([^/]+)$") or p end
+local function parent(p) return p:match("^(.*)/[^/]+$") or ROOT end
+local function is_track(name)
+  local lower = name:lower()
+  return lower:match("%.mp3$") or lower:match("%.wav$")
+end
+local function title(p) return (base(p):gsub("%.[^.]+$", "")) end
 
-local function add_dir(d, tag)
-  local found = {}
+-- Lists one folder: subfolders first, then tracks, each sorted by name. The
+-- top level also gets the recordings folder at the end.
+local function open_dir(d, select_path)
+  dir, entries, rows, sel, top = d, {}, {}, 1, 1
+  local folders, tracks = {}, {}
   for _, e in ipairs(sys.list(d) or {}) do
-    local lower = e.name:lower()
-    if not e.dir and (lower:match("%.mp3$") or lower:match("%.wav$")) then found[#found + 1] = e.name end
+    if e.dir then folders[#folders + 1] = e.name
+    elseif is_track(e.name) then tracks[#tracks + 1] = e.name end
   end
-  table.sort(found)
-  for _, n in ipairs(found) do
-    if #tracks >= MAX_TRACKS then return end
-    tracks[#tracks + 1] = d .. "/" .. n
-    rows[#rows + 1] = { label = n, value = tag }
+  table.sort(folders, function(a, b) return a:lower() < b:lower() end)
+  table.sort(tracks, function(a, b) return a:lower() < b:lower() end)
+  for _, n in ipairs(folders) do
+    if #entries >= MAX_ENTRIES then break end
+    entries[#entries + 1] = { path = d .. "/" .. n, dir = true }
+    rows[#rows + 1] = { label = n, badge = "D", badge_color = ui.accents.orange }
   end
-end
-
-local function scan(extra)
-  tracks, rows = {}, {}
-  sd = sys.storage() == "SD"
-  if sd then
-    add_dir("data/music", nil)
-    add_dir("data/recordings", "rec")
-  else
-    add_dir("data/recordings", "rec")
+  for _, n in ipairs(tracks) do
+    if #entries >= MAX_ENTRIES then break end
+    entries[#entries + 1] = { path = d .. "/" .. n }
+    rows[#rows + 1] = { label = title(n) }
   end
-  if extra then
-    for i, p in ipairs(tracks) do if p == extra then return i end end
-    table.insert(tracks, 1, extra)
-    table.insert(rows, 1, { label = base(extra), value = "file" })
-    return 1
+  if d == ROOT and #(sys.list(RECORDINGS) or {}) > 0 then
+    entries[#entries + 1] = { path = RECORDINGS, dir = true }
+    rows[#rows + 1] = { label = "Recordings", badge = "R", badge_color = ui.accents.red }
+  end
+  for i, e in ipairs(entries) do
+    if e.path == select_path then sel = i end
   end
 end
 
-local function play(i)
-  local p = tracks[i]
+local function play_at(i)
+  local p = queue[i]
   if not p then return end
   playing = false
   audio.stop()
@@ -66,7 +74,25 @@ local function play(i)
     shell.toast(tostring(why or "Can't play this file"), 3)
     return
   end
-  cur, sel, playing, grace, done, total = i, i, true, 1, 0, 0
+  cur, playing, grace, done, total = i, true, 1, 0, 0
+  for j, e in ipairs(entries) do  -- the selection follows playback in the folder on screen
+    if e.path == p then sel = j end
+  end
+end
+
+-- Plays the selected track and queues the tracks of the folder on screen.
+local function play_selected()
+  local chosen = entries[sel]
+  if not chosen or chosen.dir then return end
+  queue = {}
+  local start = 1
+  for _, e in ipairs(entries) do
+    if not e.dir then
+      queue[#queue + 1] = e.path
+      if e.path == chosen.path then start = #queue end
+    end
+  end
+  play_at(start)
 end
 
 local function stop()
@@ -81,12 +107,23 @@ local function set_volume(v)
   shell.toast(string.format("Volume %d%%", math.floor(vol * 100 / 255 + 0.5)), 1)
 end
 
+local function now_playing() return cur and queue[cur] end
+
 function app.init(args)
-  sel, top, cur, playing = 1, 1, nil, false
+  queue, cur, playing = {}, nil, false
   shell.focus(true)
   vol = tonumber(cfg.get("vol")) or 100
-  local i = scan(args and args.path)
-  if i then sel = i; play(i) end
+  local path = args and args.path
+  if path then
+    open_dir(parent(path), path)
+    if not (entries[sel] and entries[sel].path == path) then
+      -- the folder could not be listed: play the file on its own
+      entries, rows, sel = { { path = path } }, { { label = title(path) } }, 1
+    end
+    play_selected()
+  else
+    open_dir(ROOT)
+  end
 end
 
 function app.update(dt)
@@ -96,39 +133,55 @@ function app.update(dt)
   grace = grace - dt
   if st == "playing" then grace = 0
   elseif grace <= 0 then
-    -- the track ended by itself: go on to the next one
+    -- the track ended by itself: go on to the next one in its folder
     playing = false
-    if cur and cur < #tracks then play(cur + 1)
-    else shell.toast("End of list") end
+    if cur and cur < #queue then play_at(cur + 1)
+    else shell.toast("End of album") end
   end
 end
 
 function app.draw()
-  if #tracks == 0 then
-    ui.empty("music", "No music found", sd and "Put MP3 or WAV files in /liveos/data/music" or "Insert an SD card")
+  if #entries == 0 and dir == ROOT then
+    ui.empty("music", "No music found", "Put MP3 or WAV files in /liveos/data/music")
     ui.footer({ { "Esc", "Home" } })
     return
   end
   ui.card(4, 16, 232, 28, playing)
-  local name = cur and rows[cur] and rows[cur].label or "Not playing"
-  ui.text(10, 20, ui.fit(name, 160), playing and col.text or col.muted)
+  local np = now_playing()
+  ui.text(10, 20, ui.fit(np and title(np) or "Not playing", 160), playing and col.text or col.muted)
   ui.right(230, 20, string.format("VOL %d%%", math.floor(vol * 100 / 255 + 0.5)), col.muted)
   ui.bar(10, 33, 150, 5, total > 0 and done / total or 0)
   ui.right(230, 32, mmss(done) .. "/" .. mmss(total), col.muted)
-  top = ui.list(rows, sel, top, 4, 47, 230, 15, 5)
-  ui.footer({ { "Enter", (playing and sel == cur) and "Stop" or "Play" }, { ",/", "Skip" }, { "-=", "Vol" },
-    { "Esc", "Home" } })
+  local where = dir == ROOT and "Music" or dir == RECORDINGS and "Recordings"
+    or (dir:sub(1, #ROOT + 1) == ROOT .. "/" and dir:sub(#ROOT + 2) or dir):gsub("/", " / ")
+  ui.text(8, 48, ui.fit(where, 224), col.muted)
+  if #entries == 0 then
+    ui.text(8, 64, "Empty folder", col.muted)
+  else
+    top = ui.list(rows, sel, top, 4, 59, 230, 15, 4)
+  end
+  local e = entries[sel]
+  local enter = e and e.dir and "Open" or ((playing and e and e.path == np) and "Stop" or "Play")
+  ui.footer({ { "Enter", enter }, { ",/", "Skip" }, { "-=", "Vol" }, { "Esc", dir == ROOT and "Home" or "Up" } })
 end
 
 function app.key(k)
   local d = ui.nav(k)
-  local n = #tracks
+  local n = #entries
   if d == "up" then sel = math.max(1, sel - 1)
   elseif d == "down" then sel = math.min(math.max(1, n), sel + 1)
-  elseif d == "left" and n > 0 then play(((cur or sel) - 2) % n + 1)
-  elseif d == "right" and n > 0 then play((cur or sel) % n + 1)
+  elseif d == "left" and #queue > 0 then play_at(((cur or 1) - 2) % #queue + 1)
+  elseif d == "right" and #queue > 0 then play_at((cur or 0) % #queue + 1)
   elseif k.key == "enter" then
-    if playing and sel == cur then stop() elseif n > 0 then play(sel) end
+    local e = entries[sel]
+    if not e then return true end
+    if e.dir then open_dir(e.path)
+    elseif playing and e.path == now_playing() then stop()
+    else play_selected() end
+  elseif k.key == "esc" or k.key == "backspace" then
+    if dir == ROOT then return false end
+    local inside = dir:sub(1, #ROOT + 1) == ROOT .. "/"
+    open_dir(inside and parent(dir) or ROOT, dir)  -- recordings, or a folder opened from Files
   elseif k.text == "=" or k.text == "+" then set_volume(vol + 16)
   elseif k.text == "-" or k.text == "_" then set_volume(vol - 16)
   else return false end
@@ -137,7 +190,7 @@ end
 
 function app.close()
   audio.stop()
-  tracks, rows = {}, {}
+  entries, rows, queue = {}, {}, {}
 end
 
 return app

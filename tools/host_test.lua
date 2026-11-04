@@ -84,9 +84,16 @@ sys = {
     h:close()
     local prefix = dir ~= "" and (dir .. "/") or ""
     for p in pairs(overlay) do
-      if p:sub(1, #prefix) == prefix and not p:sub(#prefix + 1):find("/") then
-        local name = p:sub(#prefix + 1)
-        if not seen[name] then out[#out + 1] = { name = name, dir = false, stored = true, emb = false, size = #overlay[p] } end
+      if p:sub(1, #prefix) == prefix then
+        local rest = p:sub(#prefix + 1)
+        local sub = rest:match("^([^/]+)/")  -- a file deeper down: its folder is listed here
+        if sub and not seen[sub] then
+          out[#out + 1] = { name = sub, dir = true, stored = true, emb = false, size = 0 }
+          seen[sub] = true
+        elseif not sub and not seen[rest] then
+          out[#out + 1] = { name = rest, dir = false, stored = true, emb = false, size = #overlay[p] }
+          seen[rest] = true
+        end
       end
     end
     return out
