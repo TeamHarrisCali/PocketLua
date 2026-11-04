@@ -18,15 +18,11 @@
 #include "syslog.h"
 
 // A quarter-screen frame buffer (16 KB instead of 65 KB): each frame is drawn
-// in four bands; g_bandY tells the drawing code which band it is. Apps that
-// make HTTPS requests get eighth-screen bands (8 KB), since Wi-Fi and the
-// network stack need that heap during a TLS handshake.
+// in four bands; g_bandY tells the drawing code which band it is.
 M5Canvas canvas(&M5Cardputer.Display);
-static const int BAND_H = (SCREEN_H + 3) / 4, SLIM_BAND_H = (SCREEN_H + 7) / 8;
+static const int BAND_H = (SCREEN_H + 3) / 4;
 int g_bandY = 0;
 int g_bandH = BAND_H;
-
-bool discordBusy();  // discord.cpp
 
 // Stall diagnosis: the main loop leaves a breadcrumb (what it is doing) and a
 // heartbeat. A small task watches the heartbeat: if the loop stops for 8 s it
@@ -58,16 +54,6 @@ static void watchMain(void *) {
   }
 }
 
-void setFrameSlim(bool slim) {
-  int h = slim ? SLIM_BAND_H : BAND_H;
-  if (h == g_bandH) return;
-  canvas.deleteSprite();
-  if (!canvas.createSprite(SCREEN_W, h)) {  // no room for the full buffer: stay slim
-    h = SLIM_BAND_H;
-    canvas.createSprite(SCREEN_W, h);
-  }
-  g_bandH = h;
-}
 bool g_displayAsleep = false;  // display sleep: nothing is drawn
 bool g_displayHold = false;    // an app draws straight to the panel
 String g_screenshotPath;       // taken on the next frame
@@ -323,10 +309,7 @@ static void osMain() {
       }
       g_bandY = 0;
     }
-    // While a TLS handshake runs on core 0, run this loop slowly: both cores
-    // share the flash cache, and redrawing through Lua 30 times a second kept
-    // evicting BearSSL's code and tables.
-    uint32_t frameMs = g_displayAsleep ? 100 : discordBusy() ? 150 : 33;  // asleep: poll less, save battery
+    uint32_t frameMs = g_displayAsleep ? 100 : 33;  // asleep: poll less, save battery
     uint32_t el = millis() - t0;
     if (el < frameMs) delay(frameMs - el);
   }

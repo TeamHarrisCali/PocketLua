@@ -23,7 +23,6 @@ static const size_t MEM_LIMIT = 160 * 1024;
 static const size_t HEAP_RESERVE = 16 * 1024;
 static multi_heap_handle_t arena = nullptr;
 static void *arenaMem = nullptr;
-static portMUX_TYPE arenaLock = portMUX_INITIALIZER_UNLOCKED;  // Lua and the Discord TLS task share it
 
 static void *aMalloc(size_t n) { return arena ? multi_heap_malloc(arena, n) : malloc(n); }
 static void *aRealloc(void *p, size_t n) { return arena ? multi_heap_realloc(arena, p, n) : realloc(p, n); }
@@ -37,23 +36,8 @@ void reserveArena() {
   if (!arenaMem) { usbdev::log("lua arena: could not reserve, using the shared heap"); return; }
   arena = multi_heap_register(arenaMem, ARENA_SIZE);
   if (!arena) { heap_caps_free(arenaMem); arenaMem = nullptr; return; }
-  multi_heap_set_lock(arena, &arenaLock);
   luapool::setBackend(arenaPage, arenaPageFree);
   usbdev::log(String("lua arena: ") + ARENA_SIZE / 1024 + " KB reserved");
-}
-
-// Native code may borrow the arena's spare room (TLS buffers while an app
-// talks HTTPS): what Lua isn't using would otherwise sit idle.
-void *arenaBorrow(size_t n) { return arena ? multi_heap_malloc(arena, n) : nullptr; }
-bool inArena(const void *p) {
-  return arenaMem && p >= arenaMem && (const uint8_t *)p < (const uint8_t *)arenaMem + ARENA_SIZE;
-}
-void arenaReturn(void *p) { multi_heap_free(arena, p); }
-size_t arenaLargest() {
-  if (!arena) return 0;
-  multi_heap_info_t info;
-  multi_heap_get_info(arena, &info);
-  return info.largest_free_block;
 }
 
 size_t arenaFree() { return arena ? multi_heap_free_size(arena) : heap_caps_get_free_size(MALLOC_CAP_8BIT); }
@@ -121,29 +105,9 @@ bool call(int nargs, int nresults) {
   return true;
 }
 
-// A block for a TLS record buffer, set aside when an app that declares
-// `tls = true` opens, while the arena is still empty: by the time the app
-// makes its first HTTPS request, Lua has broken the free space into pieces
-// smaller than the ~16.7 KB mbedTLS needs. Freed when the app closes.
-static const size_t TLS_SLAB = 17 * 1024;
-static void *slab = nullptr;
-static bool slabUsed = false;
-
-void *takeSlab(size_t n) {
-  if (!slab || slabUsed || n > TLS_SLAB) return nullptr;
-  slabUsed = true;
-  return slab;
-}
-bool giveSlab(void *p) {
-  if (!p || p != slab) return false;
-  slabUsed = false;
-  return true;
-}
-
-bool open(bool reserveTls) {
+bool open() {
   close();
   used = 0;
-  if (reserveTls && arena) slab = multi_heap_malloc(arena, TLS_SLAB);
   L = lua_newstate(alloc, nullptr);
   if (!L) { lastError = "not enough memory"; return false; }
   luaL_requiref(L, "_G", luaopen_base, 1);
@@ -170,9 +134,6 @@ void close() {
   if (L) lua_close(L);
   L = nullptr;
   used = 0;
-  if (slab) multi_heap_free(arena, slab);
-  slab = nullptr;
-  slabUsed = false;
 }
 
 }  // namespace vm

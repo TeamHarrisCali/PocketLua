@@ -147,12 +147,9 @@ audio.tags = function() return {} end
 musiclib = { info = function() return nil end, rows = function() return {} end, item = function() end,
   albums_in = function() return {} end, scan = function() return true end,
   scan_status = function() return "done", 0, "" end }
-discord = { ready = function() return false end, guilds = rec("dc_guilds"), channels = rec("dc_channels"),
-  list = function() return {} end, open = rec("dc_open"), send = rec("dc_send"),
-  messages = function() return {} end, status = function() return "idle", "" end, stop = rec("dc_stop") }
 
 -- the device creates these on first use (sys.hwlib); keep copies for that
-for _, n in ipairs({ "audio", "ir", "i2c", "http", "lora", "gps", "disp", "musiclib", "discord" }) do _G["__hw_" .. n] = _G[n] end
+for _, n in ipairs({ "audio", "ir", "i2c", "http", "lora", "gps", "disp", "musiclib" }) do _G["__hw_" .. n] = _G[n] end
 
 -- loopback transport: whatever we send comes back as if the peer sent it
 local net_in = {}

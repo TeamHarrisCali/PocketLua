@@ -23,9 +23,7 @@ extern M5Canvas canvas;
 
 using ui::col;
 
-bool discordBusy();  // discord.cpp: a TLS request is running and needs the heap
 extern const char *volatile g_crumb;  // main.cpp: what the main loop is doing
-void setFrameSlim(bool slim);  // main.cpp: half-size frame buffer for HTTPS apps
 
 namespace shell {
 
@@ -292,7 +290,6 @@ struct AppInfo {
   String name, title, icon, cat;
   uint16_t color;
   int order;
-  bool tls;  // makes HTTPS requests: open with a TLS buffer set aside (vm::open)
 };
 static std::vector<AppInfo> apps;
 static bool appsDirty = true;
@@ -342,7 +339,6 @@ static void scanApps() {
     if (!info.icon.length()) info.icon = "app";
     info.cat = field(t, "category");
     if (!info.cat.length()) info.cat = "tools";
-    info.tls = field(t, "tls") == "true";
     String o = field(t, "order");
     info.order = o.length() ? o.toInt() : 100;
     String c = field(t, "color");
@@ -429,7 +425,6 @@ static void closeApp(bool save) {
   g_displayHold = false;
   appsDirty = true;  // the app may have installed or edited apps
   focus(false);      // after vm::close(), so Wi-Fi gets the freed RAM
-  setFrameSlim(false);
 }
 
 static void fail(const String &msg) {
@@ -480,9 +475,7 @@ static void launch(const String &name, const String &path, int line, bool return
   appTitle = name;
   if (const AppInfo *a = findApp(name)) appTitle = a->title;
   if (vm::arenaFree() < MIN_FREE_TO_OPEN) { fail("not enough memory to open " + name); return; }
-  const AppInfo *info = findApp(name);
-  setFrameSlim(info && info->tls);  // HTTPS apps: 8 KB more heap for the network stack
-  if (!vm::open(info && info->tls)) { fail(vm::lastError); return; }
+  if (!vm::open()) { fail(vm::lastError); return; }
   vmGen++;
   lua_State *L = vm::L;
   String file = "apps/" + name + ".lua", e;
@@ -1236,7 +1229,6 @@ static bool roamScanning = false;
 
 static void roamTick() {
   if (WiFi.status() != WL_CONNECTED) { roamScanning = false; return; }
-  if (::discordBusy() && !roamScanning) return;  // a Discord TLS request needs the heap
   if (roamScanning) {
     int n = WiFi.scanComplete();
     if (n == WIFI_SCAN_RUNNING) return;

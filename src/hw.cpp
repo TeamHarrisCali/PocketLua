@@ -921,11 +921,9 @@ static const luaL_Reg loraLib[] = {{"begin", lo_begin}, {"send", lo_send}, {"rec
 static const luaL_Reg gpsLib[] = {{"start", gp_start}, {"stop", gp_stop}, {"read", gp_read}, {nullptr, nullptr}};
 static const luaL_Reg dispLib[] = {{"image", di_image}, {"fill", di_fill}, {"text", di_text}, {nullptr, nullptr}};
 extern const luaL_Reg musiclibFns[];  // musiclib.cpp
-extern const luaL_Reg discordFns[];   // discord.cpp
 static const struct { const char *name; const luaL_Reg *fns; } HW_LIBS[] = {
     {"audio", audioLib}, {"ir", irLib}, {"i2c", i2cLib}, {"http", httpLib},
-    {"lora", loraLib}, {"gps", gpsLib}, {"disp", dispLib}, {"musiclib", musiclibFns},
-    {"discord", discordFns}};
+    {"lora", loraLib}, {"gps", gpsLib}, {"disp", dispLib}, {"musiclib", musiclibFns}};
 
 // sys.hwlib(name) -> the table for that driver, or nil
 static int hw_lib(lua_State *L) {

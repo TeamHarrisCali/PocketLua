@@ -166,7 +166,7 @@ String serialRead() {
 // The log is also appended to data/log.txt on the card (main task only), so it
 // can be read later even if USB was not connected when something failed.
 static bool inFileLog = false;
-// log() is called from several tasks (the main loop, Discord's network task,
+// log() is called from several tasks (the main loop, audio and scan tasks,
 // the stall monitor), so the ring and the pending lines are locked. Lines from
 // other tasks reach the file through the main task (tick / its next log).
 static SemaphoreHandle_t logMu = nullptr;
