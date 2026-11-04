@@ -289,16 +289,18 @@ struct Entry {
   long srcSize = 0, codeSize = 0;
 };
 
-// Parses catalog.txt line by line from the card (no copy of the whole file:
-// with an app open the heap may not have a 12 KB block); firmware fills
-// build/size/sha.
-bool readCatalog(std::vector<Entry> &out, String &fwBuild, long &fwSize, String &fwSha) {
+// Parses catalog.txt line by line from the card and hands each app or library
+// to `each` (no copy of the whole file, and no list of every entry: after
+// Music and a Wi-Fi restart the heap's largest block can be under 10 KB, and
+// a failed allocation in C++ is a crash); firmware fills build/size/sha.
+bool readCatalog(const std::function<void(Entry &)> &each, String &fwBuild, long &fwSize, String &fwSha) {
   File file = store::openStored(CATALOG);
   if (!file) return false;
   String line;
   uint8_t buf[256];
   auto parse = [&]() {
     std::vector<String> f;
+    f.reserve(12);
     int s = 0;
     while (true) {
       int t = line.indexOf('\t', s);
@@ -312,12 +314,12 @@ bool readCatalog(std::vector<Entry> &out, String &fwBuild, long &fwSize, String 
       e.kind = "app"; e.name = f[1]; e.flag = f[2];
       e.srcSize = f[3].toInt(); e.srcSha = f[4]; e.codeSize = f[5].toInt(); e.codeSha = f[6];
       e.title = f[7]; e.cat = f[8]; e.icon = f[9]; e.libs = f[10] == "-" ? "" : f[10]; e.desc = f[11];
-      out.push_back(e);
+      each(e);
     } else if (f[0] == "lib" && f.size() >= 6) {
       Entry e;
       e.kind = "lib"; e.name = f[1];
       e.srcSize = f[2].toInt(); e.srcSha = f[3]; e.codeSize = f[4].toInt(); e.codeSha = f[5];
-      out.push_back(e);
+      each(e);
     }
   };
   int n;
@@ -382,10 +384,13 @@ void check() {
 
 // ops: "install:<app>,remove:<app>,firmware"
 void apply(const String &ops) {
-  std::vector<Entry> cat;
+  std::vector<Entry> cat;  // only the apps named in ops, and the libraries
   String fwBuild, fwSha, err;
   long fwSize = 0;
-  if (!readCatalog(cat, fwBuild, fwSize, fwSha)) { result = "error: check for updates first"; return; }
+  String wanted = "," + ops + ",";
+  if (!readCatalog([&](Entry &e) {
+        if (e.kind == "lib" || wanted.indexOf(":" + e.name + ",") >= 0) cat.push_back(e);
+      }, fwBuild, fwSize, fwSha)) { result = "error: check for updates first"; return; }
   if (!ready(err)) { result = "error: " + err; return; }
   // the files to fetch: each app's source and bytecode, plus its libraries
   struct Job { String rel; long size; String sha; };
@@ -460,21 +465,13 @@ String pendingOp, pendingArg;
 // category=, icon=, desc=, size=, core=, status=}, ...}} from the last catalog,
 // or nil if there is none yet.
 int l_list(lua_State *L) {
-  std::vector<Entry> cat;
   String fwBuild, fwSha;
   long fwSize = 0;
-  if (!readCatalog(cat, fwBuild, fwSize, fwSha)) return 0;
   lua_newtable(L);
-  lua_createtable(L, 0, 4);
-  lua_pushstring(L, fwBuild.c_str()); lua_setfield(L, -2, "build");
-  lua_pushstring(L, running().c_str()); lua_setfield(L, -2, "running");
-  lua_pushinteger(L, fwSize); lua_setfield(L, -2, "size");
-  lua_pushstring(L, fwBuild == running() ? "installed" : "update"); lua_setfield(L, -2, "status");
-  lua_setfield(L, -2, "firmware");
-  lua_newtable(L);
+  lua_newtable(L);  // apps, filled as the catalog is read
   int n = 0;
-  for (auto &e : cat) {
-    if (e.kind != "app") continue;
+  bool ok = readCatalog([&](Entry &e) {
+    if (e.kind != "app") return;
     lua_createtable(L, 0, 8);
     lua_pushstring(L, e.name.c_str()); lua_setfield(L, -2, "name");
     lua_pushstring(L, e.title.c_str()); lua_setfield(L, -2, "title");
@@ -486,8 +483,15 @@ int l_list(lua_State *L) {
     lua_pushstring(L, status(e).c_str()); lua_setfield(L, -2, "status");
     lua_rawseti(L, -2, ++n);
     feedWatch();
-  }
+  }, fwBuild, fwSize, fwSha);
+  if (!ok) { lua_pop(L, 2); return 0; }
   lua_setfield(L, -2, "apps");
+  lua_createtable(L, 0, 4);
+  lua_pushstring(L, fwBuild.c_str()); lua_setfield(L, -2, "build");
+  lua_pushstring(L, running().c_str()); lua_setfield(L, -2, "running");
+  lua_pushinteger(L, fwSize); lua_setfield(L, -2, "size");
+  lua_pushstring(L, fwBuild == running() ? "installed" : "update"); lua_setfield(L, -2, "status");
+  lua_setfield(L, -2, "firmware");
   return 1;
 }
 
