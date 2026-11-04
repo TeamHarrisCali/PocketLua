@@ -19,7 +19,7 @@ There are two update channels, each a branch of this repository with its own `re
 - **Release** (`main`): the official builds.
 - **Beta** (`beta`): what comes next, to test before it goes to Release.
 
-A firmware is built for one channel and the App Store reads that channel. To change it, go to Settings > About > Updates. Joining Beta takes one confirmation; the device then installs the Beta firmware and the Beta version of every installed app, and restarts. Going back to Release is deliberately harder (you type `RELEASE`), because it installs the older Release firmware and apps, and data written by Beta apps may not work with them. Apps that exist only in Beta stay installed.
+A firmware is built for one channel and the App Store reads that channel. To change it, go to Settings > About > Updates. Joining Beta takes one confirmation; the device then installs the Beta firmware and the Beta version of every installed app, and restarts. Going back to Release warns first: it installs the older Release firmware and apps, and data written by Beta apps may not work with them. Apps that exist only in Beta stay installed.
 
 ## Publishing
 

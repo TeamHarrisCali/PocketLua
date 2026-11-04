@@ -3,9 +3,8 @@
 return function(ctx)
 local push, pop, cycle, num = ctx.push, ctx.pop, ctx.cycle, ctx.num
 -- ---------------------------------------------------------------- Updates
--- Release (the main branch) or Beta. Joining Beta takes one yes; leaving it
--- needs RELEASE typed, since Beta apps and their data may not work on the
--- older Release. Either way the App Store does the switch natively: it reads
+-- Release (the main branch) or Beta, each after a Y/N question; leaving
+-- Beta warns that Beta apps and their data may not work on the older Release. Either way the App Store does the switch natively: it reads
 -- the other channel, installs its firmware and app versions, and restarts.
 local function channel_row()
   local as = appstore
@@ -14,7 +13,7 @@ local function channel_row()
   local function switch()
     sys.log("updates: change asked on " .. cur)
     if cur == "main" then
-      shell.confirm("Join Beta", "Test builds of the firmware and apps arrive first. Installs Beta now and restarts. Leaving later is harder.",
+      shell.confirm("Join Beta", "Test builds of the firmware and apps arrive first. Installs Beta now and restarts. Going back later means older versions.",
         function(yes)
           sys.log("updates: join beta " .. (yes and "yes" or "no"))
           if yes then as.run("switch", "beta") end
@@ -24,15 +23,7 @@ local function channel_row()
     shell.confirm("Leave Beta", "Go back to Release? It reinstalls the older firmware and apps; Beta data may not work there.",
       function(yes)
         sys.log("updates: leave beta " .. (yes and "yes" or "no"))
-        if not yes then return end
-        shell.prompt("Type RELEASE to confirm", "", function(text)
-          -- the word anywhere: a key still held from the Y can add a stray letter
-          local ok = text and text:upper():gsub("%s", ""):find("RELEASE", 1, true) ~= nil
-          sys.log("updates: typed " .. (text and string.format("%q", text:sub(1, 24)) or "nothing (cancelled)") ..
-            (ok and ": switching to Release" or ""))
-          if ok then as.run("switch", "main")
-          elseif text then shell.toast("Still on Beta (type RELEASE)", 3) end
-        end)
+        if yes then as.run("switch", "main") end
       end)
   end
   -- Enter or <> (the footer's "Change") start the same, guarded, switch
