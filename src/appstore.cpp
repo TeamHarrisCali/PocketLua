@@ -476,7 +476,6 @@ void apply(const String &ops) {
   if (removes.size()) msg += String(msg.length() ? ", " : "") + removes.size() + " removed";
   if (firmware && !failed) msg += String(msg.length() ? ". " : "") + "Firmware saved: install PocketLua.bin from M5Launcher";
   result = failed ? "error: " + String(failed) + " failed: " + firstErr : (msg.length() ? msg : String("Nothing to do"));
-  usbdev::log("store: " + result);
 }
 
 // ---------------------------------------------------------------- Lua
@@ -548,6 +547,7 @@ void appstoreRun() {
   if (op == "check") check();
   else if (op == "apply") apply(arg);
   freeTls();
+  usbdev::log("store: " + result);  // every outcome, including "Wi-Fi isn't connected"
 }
 
 extern const luaL_Reg appstoreFns[] = {{"list", l_list}, {"run", l_run}, {"result", l_result},
