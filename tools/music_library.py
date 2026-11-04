@@ -9,7 +9,7 @@ lists are built here, already sorted, as fixed-size text records: the device
 reads only the rows on screen by seeking to row * size.
 
   info.txt     "liveos-library 1" and counts
-  tracks.dat   512 B: path \t title \t artist \t album \t genre \t track
+  tracks.dat   512 B: path \t title \t artist \t album \t genre \t track \t album artist \t disc
                sorted by album artist, album, disc, track, title
   artists.dat  128 B: name \t first track \t count       (tracks are contiguous)
   albums.dat   128 B: album \t artist \t first track \t count   (sorted by album)
@@ -99,8 +99,14 @@ def main():
             f.write(b"".join(rows))
         os.replace(tmp, os.path.join(out, name))
 
-    write("tracks.dat", [record([t["rel"], t["title"], t["artist"], t["album"], t["genre"], str(t["track"] or "")], TRACK)
-                         for t in tracks])
+    def track_rec(t):
+        # the text gets whatever room the path leaves (as on the device)
+        room = (480 - len(t["rel"].encode())) // 5
+        f = [t["title"], t["artist"], t["album"], t["genre"], t["group"]]
+        f = [x[:room].strip() or "(untitled)" for x in f]
+        return record([t["rel"], f[0], f[1], f[2], f[3], str(t["track"] or ""), f[4], str(t["disc"])], TRACK)
+
+    write("tracks.dat", [track_rec(t) for t in tracks])
 
     artists, albums = [], []
     for i, t in enumerate(tracks):

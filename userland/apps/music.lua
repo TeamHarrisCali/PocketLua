@@ -248,10 +248,22 @@ local function build_menu()
     menu[#menu + 1] = { "Shuffle all", "shuffle", lib.tracks }
   end
   menu[#menu + 1] = { "Folders", "folders" }
+  menu[#menu + 1] = { lib and "Rescan library" or "Build library", "scan" }
+end
+
+-- Rebuilds the library index on the device (new and removed music). It runs
+-- natively in the background; playback stops because it needs that RAM.
+local function start_scan()
+  audio.stop()
+  state, stack, L = "stopped", {}, nil
+  local ok, why = musiclib.scan(not lib)
+  if not ok then shell.toast("Can't scan: " .. tostring(why), 3); return end
+  view = "scan"
 end
 
 local function menu_enter(id)
   if id == "playing" then view = "playing"
+  elseif id == "scan" then start_scan()
   elseif id == "folders" then open_list(dir_list(ROOT))
   elseif id == "shuffle" then
     shuffle, hist = true, {}
@@ -312,6 +324,17 @@ function app.init(args)
 end
 
 function app.update(dt)
+  if view == "scan" then
+    local st, n, msg = musiclib.scan_status()
+    if st == "done" or st == "failed" then
+      lib = musiclib.info()
+      build_menu()
+      view, msel = "menu", 1
+      if q and q.kind ~= "dir" then q, np = nil, nil; cfg.set("music_resume", nil) end  -- rows moved
+      shell.toast(st == "done" and ("Library: " .. n .. " tracks") or ("Scan failed: " .. tostring(msg)), 4)
+    end
+    return
+  end
   idle = idle + dt
   if view ~= "playing" and state == "playing" and idle >= IDLE_BACK then view = "playing" end
   if state ~= "playing" then return end
@@ -349,6 +372,13 @@ end
 
 function app.draw()
   if view == "playing" then return draw_playing() end
+  if view == "scan" then
+    local st, n = musiclib.scan_status()
+    ui.empty("music", "Scanning library", (st == "reading" and "Reading " or st == "sorting" and "Sorting " or "Writing ") ..
+      n .. " tracks")
+    ui.footer({ { "", "Please wait" } })
+    return
+  end
   -- the current track as a strip above the lists
   ui.card(4, 16, 232, 22, state == "playing")
   ui.text(10, 19, ui.fit(np and np.title or "Not playing", 168), state == "playing" and col.text or col.muted)
@@ -376,6 +406,7 @@ end
 
 function app.key(k)
   idle = 0
+  if view == "scan" then return true end  -- leaving would bring Wi-Fi back mid-scan
   local d = ui.nav(k)
   local c = not k.ctrl and not k.fn and k.text and k.text:lower()
   -- the same everywhere

@@ -263,6 +263,19 @@ key("down"); key("down"); key("enter")
 check(has(screen(), "Pop") and has(screen(), "Rock"), "music: Genres lists the genres")
 key("down"); key("enter"); key("enter")
 check(last("play")[2] == "data/music/Zed/Z/01 Zeta.mp3", "music: plays from a genre")
+local scans = 0
+musiclib.scan = function(full) scans = scans + 1; return true end
+local scan_state = "reading"
+musiclib.scan_status = function() return scan_state, 2, "" end
+key("esc"); key("esc"); key("esc")
+for _ = 1, 6 do key("down") end
+check(has(screen(), "Rescan library"), "music: menu offers a rescan")
+key("enter")
+check(scans == 1 and has(screen(), "Scanning library") and has(screen(), "Reading 2"), "music: rescan shows progress")
+key("esc")
+alive("music", "Esc is ignored while scanning")
+scan_state = "done"; frames(2)
+check(has(screen(), "Artists") and toasts[#toasts] == "Library: 2 tracks", "music: back to the menu when the scan is done")
 shell.home(); frames(2)
 musiclib, __hw_musiclib = saved_lib, saved_lib
 for _, n in ipairs({ "a_song.wav", "b_song.wav", "notes.txt", "Artist/Album/01 First.mp3", "Artist/Album/02 Second.mp3" }) do

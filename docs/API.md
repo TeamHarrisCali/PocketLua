@@ -73,6 +73,7 @@ Use the `ui.*` toolkit (see `docs/UI.md`) rather than raw drawing where possible
 | `audio.pause(on)`, `audio.seek(seconds)` | Pause/resume and jump within the playing track; `audio.status()` then reports "paused" |
 | `audio.tags(path)` | `{title, artist, album, track}` from the file's ID3 tag (missing fields left out) |
 | `musiclib.info()`, `.rows(kind, first, n)`, `.item(kind, i)`, `.albums_in(first, count)` | The music library index built by `tools/music_library.py` (see `src/musiclib.cpp`); `info()` is nil without one |
+| `musiclib.scan([full])`, `musiclib.scan_status()` | Rebuild that index on the device in the background (new files are read, known ones reused; `full` re-reads all). Status: "reading"/"sorting"/"writing"/"done"/"failed", track count, message. Stop playback first |
 | `audio.stop()` | Stop recording or playback |
 | `audio.status()` | "idle", "recording" or "playing"; seconds done; seconds total |
 | `audio.analyze()` | Listens for ~32 ms: level and peak (linear, 0-1 of full scale), pitch in Hz (0 = none), and 8 band amplitudes (0-1) centred on 100, 180, 320, 560, 1000, 1700, 2800 and 4000 Hz |

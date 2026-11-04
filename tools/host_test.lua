@@ -145,7 +145,8 @@ audio.pause = function(on) return on end
 audio.seek = rec("seek")
 audio.tags = function() return {} end
 musiclib = { info = function() return nil end, rows = function() return {} end, item = function() end,
-  albums_in = function() return {} end }
+  albums_in = function() return {} end, scan = function() return true end,
+  scan_status = function() return "done", 0, "" end }
 
 -- the device creates these on first use (sys.hwlib); keep copies for that
 for _, n in ipairs({ "audio", "ir", "i2c", "http", "lora", "gps", "disp", "musiclib" }) do _G["__hw_" .. n] = _G[n] end

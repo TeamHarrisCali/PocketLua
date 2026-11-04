@@ -20,7 +20,9 @@ static bool needScan = false;
 static volatile int pins = 0;
 static uint32_t lastUse = 0;
 
-static bool sdMount() { return SD.begin(12, SPI, 25000000, "/sd", 2); }
+// 4 open files: MP3 playback, plus the library rescan (old index, new index,
+// the file whose tags it reads).
+static bool sdMount() { return SD.begin(12, SPI, 25000000, "/sd", 4); }
 
 static void scanOverrides();
 

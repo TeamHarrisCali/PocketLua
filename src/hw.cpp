@@ -19,6 +19,7 @@ static void *mp3Scratch = nullptr;
 #define MINIMP3_SCRATCH mp3Scratch
 #include <minimp3.h>
 #include "hw.h"
+#include "musiclib.h"
 #include "storage.h"
 #include "usbdev.h"
 
@@ -496,104 +497,22 @@ static int au_status(lua_State *L) {
   return 3;
 }
 
-// ID3 text to plain ASCII: the UI font has no accented letters, so Latin-1
-// letters are folded (é -> e) and typographic quotes and dashes simplified.
-static void id3Put(String &out, uint32_t c) {
-  static const char fold[] = "AAAAAAACEEEEIIIIDNOOOOOxOUUUUYPsaaaaaaaceeeeiiiidnooooo/ouuuuypy";
-  if (!c) return;
-  if (c < 0x80) out += (char)c;
-  else if (c >= 0xC0 && c <= 0xFF) out += fold[c - 0xC0];
-  else if (c == 0x2018 || c == 0x2019) out += '\'';
-  else if (c == 0x201C || c == 0x201D) out += '"';
-  else if (c == 0x2013 || c == 0x2014) out += '-';
-  else if (c == 0x2026) out += "...";
-  else out += '?';
-}
-
-static String id3Text(const uint8_t *p, size_t n) {
-  String out;
-  if (!n) return out;
-  uint8_t enc = *p++;
-  n--;
-  if (enc == 1 || enc == 2) {  // UTF-16 (with a byte order mark) or UTF-16BE
-    bool be = enc == 2;
-    size_t i = 0;
-    if (enc == 1 && n >= 2 && ((p[0] == 0xFF && p[1] == 0xFE) || (p[0] == 0xFE && p[1] == 0xFF))) { be = p[0] == 0xFE; i = 2; }
-    for (; i + 1 < n; i += 2) {
-      uint32_t c = be ? (p[i] << 8 | p[i + 1]) : (p[i + 1] << 8 | p[i]);
-      if (!c) break;
-      if (c >= 0xD800 && c < 0xE000) { if (c < 0xDC00) id3Put(out, '?'); continue; }  // outside the BMP
-      id3Put(out, c);
-    }
-  } else if (enc == 3) {  // UTF-8
-    for (size_t i = 0; i < n && p[i];) {
-      uint32_t c = p[i];
-      int more = c < 0x80 ? 0 : c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : -1;
-      if (more < 0) { i++; continue; }
-      c &= more ? (0x3F >> more) : 0x7F;
-      i++;
-      for (int k = 0; k < more && i < n; k++, i++) c = c << 6 | (p[i] & 0x3F);
-      id3Put(out, c);
-    }
-  } else {  // ISO-8859-1
-    for (size_t i = 0; i < n && p[i]; i++) id3Put(out, p[i]);
-  }
-  out.trim();
-  return out;
-}
-
-// tags(path) -> {title, artist, album, track} from the ID3v2 tag (versions
-// 2.2-2.4) or an ID3v1 tag; fields that are missing are left out.
+// tags(path) -> {title, artist, album, track, genre} from the file's ID3 tag
+// (see readTags in musiclib.cpp); missing fields are left out.
 static int au_tags(lua_State *L) {
-  String real;
-  fs::FS *fs = store::resolve(str(L, 1), real);
-  File f = fs ? fs->open(real, "r") : File();
+  Tags t;
+  readTags(str(L, 1), t);
   lua_newtable(L);
-  if (!f) return 1;
-  int found = 0;
-  uint8_t h[10], buf[160];
-  auto syncsafe = [](const uint8_t *b) { return (uint32_t)(b[0] & 0x7F) << 21 | (b[1] & 0x7F) << 14 | (b[2] & 0x7F) << 7 | (b[3] & 0x7F); };
   auto set = [&](const char *key, const String &v) {
     if (!v.length()) return;
     lua_pushstring(L, v.c_str());
     lua_setfield(L, -2, key);
-    found++;
   };
-  if (f.read(h, 10) == 10 && !memcmp(h, "ID3", 3) && h[3] >= 2 && h[3] <= 4) {
-    int ver = h[3], hdr = ver == 2 ? 6 : 10;
-    size_t end = 10 + syncsafe(h + 6), pos = 10;
-    if ((h[5] & 0x40) && ver >= 3 && f.read(buf, 4) == 4)  // extended header
-      pos = ver == 4 ? 10 + syncsafe(buf) : 14 + ((uint32_t)buf[0] << 24 | buf[1] << 16 | buf[2] << 8 | buf[3]);
-    while (pos + hdr <= end && found < 4) {
-      f.seek(pos);
-      if (f.read(buf, hdr) != hdr || !buf[0]) break;  // padding
-      uint32_t size = ver == 2 ? (buf[3] << 16 | buf[4] << 8 | buf[5])
-                    : ver == 4 ? syncsafe(buf + 4) : ((uint32_t)buf[4] << 24 | buf[5] << 16 | buf[6] << 8 | buf[7]);
-      char id[5] = {0};
-      memcpy(id, buf, ver == 2 ? 3 : 4);
-      const char *key = !strcmp(id, "TIT2") || !strcmp(id, "TT2") ? "title"
-                      : !strcmp(id, "TPE1") || !strcmp(id, "TP1") ? "artist"
-                      : !strcmp(id, "TALB") || !strcmp(id, "TAL") ? "album"
-                      : !strcmp(id, "TRCK") || !strcmp(id, "TRK") ? "track" : nullptr;
-      if (key && size > 1) {
-        size_t n = size < sizeof buf ? size : sizeof buf;
-        if (f.read(buf, n) == n) set(key, id3Text(buf, n));
-      }
-      pos += hdr + size;
-    }
-  }
-  if (!found && f.size() > 128 && f.seek(f.size() - 128) && f.read(buf, 128) == 128 && !memcmp(buf, "TAG", 3)) {
-    auto field = [&](int at, int len) {  // ID3v1: fixed-width Latin-1 fields
-      uint8_t t[32] = {0};
-      memcpy(t + 1, buf + at, len);
-      return id3Text(t, len + 1);
-    };
-    set("title", field(3, 30));
-    set("artist", field(33, 30));
-    set("album", field(63, 30));
-    if (!buf[125] && buf[126]) set("track", String(buf[126]));
-  }
-  f.close();
+  set("title", t.title);
+  set("artist", t.artist);
+  set("album", t.album);
+  set("track", t.track);
+  set("genre", t.genre);
   return 1;
 }
 
