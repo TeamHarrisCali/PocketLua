@@ -50,7 +50,7 @@
  *
 #define BR_LOMUL   1
  */
-#ifdef ARDUINO
+#if defined(ARDUINO) && !defined(ESP32)  /* LiveOS: the ESP32's 32x32->64 multiply is fast, so keep the i31/m31 code */
 #define BR_LOMUL   1
 #endif
 

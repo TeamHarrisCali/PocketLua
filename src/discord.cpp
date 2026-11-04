@@ -18,6 +18,7 @@
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 #include <esp_random.h>
+#include <esp_task_wdt.h>
 #include <time.h>
 #include "bearssl.h"
 #include <functional>
@@ -65,17 +66,19 @@ bool allocTls() {
 }
 
 String ioError;  // why the last socket read/write failed, for the log
+struct IoStats { uint32_t readMs, writeMs, readBytes, writeBytes, reads, writes; } ioStats;  // per request
 
 // Socket I/O for BearSSL. "Nothing yet" and a full send buffer are waited
 // out (up to 10 s); only a closed connection or a timeout is an error.
 int sockRead(void *ctx, unsigned char *buf, size_t len) {
   WiFiClient *c = (WiFiClient *)ctx;
   uint32_t t0 = millis();
+  ioStats.reads++;
   while (millis() - t0 < 10000) {
     int avail = c->available();
     if (avail > 0) {
       int n = c->read(buf, len < (size_t)avail ? len : (size_t)avail);
-      if (n > 0) return n;
+      if (n > 0) { ioStats.readMs += millis() - t0; ioStats.readBytes += n; return n; }
     } else if (!c->connected()) {
       ioError = "read: connection closed";
       return -1;
@@ -88,9 +91,10 @@ int sockRead(void *ctx, unsigned char *buf, size_t len) {
 int sockWrite(void *ctx, const unsigned char *buf, size_t len) {
   WiFiClient *c = (WiFiClient *)ctx;
   uint32_t t0 = millis();
+  ioStats.writes++;
   while (millis() - t0 < 10000) {
     size_t n = c->write(buf, len);
-    if (n > 0) return (int)n;
+    if (n > 0) { ioStats.writeMs += millis() - t0; ioStats.writeBytes += n; return (int)n; }
     if (!c->connected()) {
       ioError = "write: connection closed";
       return -1;
@@ -249,6 +253,21 @@ int request(const char *method, const String &path, const String &body, Json &js
   WiFiClient tcp;
   if (!tcp.connect("discord.com", 443)) return -4;
   busy = true;
+  // Full speed for the request: normal priority, with core 0's idle task off
+  // the watchdog meanwhile (BearSSL's math doesn't yield, and at idle priority
+  // it was too slow for Discord's handshake timeout). Every wait below has a
+  // 10 s timeout, so a stuck request still ends.
+  TaskHandle_t idle0 = xTaskGetIdleTaskHandleForCore(0);
+  bool unwatched = esp_task_wdt_delete(idle0) == ESP_OK;
+  vTaskPrioritySet(nullptr, 1);
+  struct Restore {
+    TaskHandle_t idle;
+    bool watch;
+    ~Restore() {
+      vTaskPrioritySet(nullptr, tskIDLE_PRIORITY);
+      if (watch) esp_task_wdt_add(idle);
+    }
+  } restore{idle0, unwatched};
   discordTrustAnchors(tls->tas);
   discordTlsInit(&tls->sc, &tls->xc, tls->tas, DISCORDTRUSTANCHORS_COUNT);
   br_ssl_engine_set_buffer(&tls->sc.eng, iobuf, BR_SSL_BUFSIZE_MONO, 0);  // one buffer, both directions
@@ -266,10 +285,18 @@ int request(const char *method, const String &path, const String &body, Json &js
   req += "\r\n" + body;
   uint32_t t0 = millis();
   ioError = "";
+  ioStats = IoStats();
+  // where the time went: waiting on the network vs BearSSL computing
+  auto timing = [&]() {
+    uint32_t total = millis() - t0;
+    return String(" [") + total + " ms: wrote " + ioStats.writeBytes + " B in " + ioStats.writes + " (" + ioStats.writeMs + " ms), read " +
+           ioStats.readBytes + " B in " + ioStats.reads + " (" + ioStats.readMs + " ms), compute ~" +
+           (total - ioStats.readMs - ioStats.writeMs) + " ms, cpu " + getCpuFrequencyMhz() + " MHz]";
+  };
   if (br_sslio_write_all(&io, req.c_str(), req.length()) < 0 || br_sslio_flush(&io) < 0) {
     usbdev::log(String("discord: TLS handshake failed, BearSSL error ") + br_ssl_engine_last_error(&tls->sc.eng) +
-                (ioError.length() ? " (" + ioError + ")" : String("")) + " after " + (millis() - t0) +
-                " ms, heap free=" + heap_caps_get_free_size(MALLOC_CAP_8BIT) + " largest=" +
+                (ioError.length() ? " (" + ioError + ")" : String("")) + timing() +
+                " heap free=" + heap_caps_get_free_size(MALLOC_CAP_8BIT) + " largest=" +
                 heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     tcp.stop();
     busy = false;
@@ -278,7 +305,7 @@ int request(const char *method, const String &path, const String &body, Json &js
   static bool shown = false;  // the margin, once per boot
   if (!shown) {
     shown = true;
-    usbdev::log(String("discord: connected (BearSSL) in ") + (millis() - t0) + " ms, heap free=" + heap_caps_get_free_size(MALLOC_CAP_8BIT) +
+    usbdev::log(String("discord: connected (BearSSL)") + timing() + " heap free=" + heap_caps_get_free_size(MALLOC_CAP_8BIT) +
                 " largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + " arena free=" + vm::arenaFree());
   }
   int status = 0;
