@@ -144,6 +144,8 @@ end
 
 function app.key(k)
   if k.key == "enter" then
+    -- a held Enter repeats; don't let it stop a recording that just started
+    if recording and sys.millis() - rec_t0 < 800 then return true end
     if recording then stop_recording() else start_recording() end
     return true
   end

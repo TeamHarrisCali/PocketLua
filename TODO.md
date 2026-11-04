@@ -7,6 +7,17 @@ Open issues found on the device. Newest first.
 - [ ] Not yet verified on the device: IR codes, tilt directions (Marble, Air Mouse,
   Level), LoRa Chat and GPS with the Cap LoRa-1262.
 
+## Planned
+
+- **MP3 player, a nice one** (user request 2026-11-04, for another time). Plays MP3 and WAV
+  from `/liveos/data/music`, with album and artist from ID3 tags, a queue, shuffle and repeat,
+  resume where you left off, and playback that keeps going on the desktop with a status-bar
+  control. Output goes to the speaker, or to the 3.5 mm jack as line out through the ES8311
+  DAC (check whether the ADV switches the jack and speaker automatically or needs a register
+  or amp-enable change). Memory: a fixed-point MP3 decoder (Helix) needs about 25–30 KB plus
+  buffers, so decode in a task with fixed buffers and no Lua VM while playing in the
+  background.
+
 ## Done
 
 - [x] **Mic recording** (fixed 2026-11-04, confirmed on the device). M5Unified's Mic read a

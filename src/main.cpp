@@ -154,7 +154,9 @@ static void pollKeys() {
     }
     memcpy(prevKeys, cur, sizeof(KeyEv) * n);
     prevCount = n;
-    heldSince = lastRepeat = now;
+    // Time the hold from after the handler: a slow one (starting the mic takes
+    // ~250 ms) would otherwise turn a normal press into a repeat.
+    heldSince = lastRepeat = millis();
   } else if (n > 0 && now - heldSince > 400 && now - lastRepeat > 60) {
     emitKey(lastEv, st);
     lastRepeat = now;

@@ -186,13 +186,12 @@ static int g_brightness(lua_State *L) {
 // ---------------------------------------------------------------- snd / imu
 // The speaker is stopped at boot to free its DMA buffers and task; it starts on
 // the first sound.
-void hwUseSpeaker();  // hw.cpp: stops the mic, starts the speaker
+bool hwUseSpeaker();  // hw.cpp: stops the mic, starts the speaker; false while recording
 void playTone(uint16_t freq, uint32_t ms) {
-  hwUseSpeaker();
-  M5Cardputer.Speaker.tone(freq, ms);
+  if (hwUseSpeaker()) M5Cardputer.Speaker.tone(freq, ms);
 }
 static int s_tone(lua_State *L) {
-  hwUseSpeaker();
+  if (!hwUseSpeaker()) return 0;
   M5Cardputer.Speaker.tone((float)luaL_checknumber(L, 1), (uint32_t)luaL_optinteger(L, 2, 100));
   return 0;
 }

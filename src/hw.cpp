@@ -353,8 +353,13 @@ void hwTick() {
   if (aMode == A_IDLE && micRx && millis() - micLastUse > 4000) micClose();
 }
 
-// Shared by snd.tone in bindings.cpp
-void hwUseSpeaker() { useSpeaker(); }
+// Shared by snd.tone in bindings.cpp. False while recording: the speaker would
+// take the mic's pins and end the recording.
+bool hwUseSpeaker() {
+  if (aMode == A_REC) return false;
+  useSpeaker();
+  return true;
+}
 
 // =============================================================== ir
 static bool irReady = false;
