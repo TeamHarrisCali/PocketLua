@@ -186,6 +186,24 @@ static void recTask(void *) {
   vTaskDelete(nullptr);
 }
 
+// Lets the last queued buffers play out, at most 2 s: a speaker that never
+// finishes must not keep the task (and "audio busy") alive.
+static void speakerDrain() {
+  uint32_t t0 = millis();
+  while (M5Cardputer.Speaker.isPlaying(0) && millis() - t0 < 2000) vTaskDelay(2);
+  if (M5Cardputer.Speaker.isPlaying(0)) M5Cardputer.Speaker.stop(0);
+}
+
+// Starts an audio task, or logs why it couldn't (its stack is 8 KB in one
+// block, which a fragmented heap may not have).
+static bool startAudioTask(TaskFunction_t fn, const char *name) {
+  if (xTaskCreatePinnedToCore(fn, name, 8192, nullptr, 3, &aTask, 0) == pdPASS) return true;
+  aTask = nullptr;
+  usbdev::log(String("audio: no memory for the ") + name + " task, heap free=" + heap_caps_get_free_size(MALLOC_CAP_8BIT) +
+              " largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+  return false;
+}
+
 // While paused the playback task idles here. The speaker channel is cut at
 // once; a seek request or stop ends the wait.
 static void pausedWait() {
@@ -220,7 +238,7 @@ static void playTask(void *) {
       idx ^= 1;
     }
     if (aStop) M5Cardputer.Speaker.stop(0);
-    while (M5Cardputer.Speaker.isPlaying(0)) vTaskDelay(2);
+    speakerDrain();
   }
   aFile.close();
   free(buf[0]);
@@ -304,7 +322,12 @@ static void mp3Seek(uint32_t sec) {
   aSamples = sec * aRate;
 }
 
+// Created before the MP3 buffers (so its stack gets a block while large ones
+// are still free); it waits until au_play has set everything up, or exits if
+// that failed.
 static void mp3Task(void *) {
+  ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+  if (aStop) vTaskDelete(nullptr);  // au_play already forgot this task
   mp3dec_frame_info_t info;
   int idx = 0;
   while (!aStop) {
@@ -325,7 +348,7 @@ static void mp3Task(void *) {
     vTaskDelay(1);
   }
   if (aStop) M5Cardputer.Speaker.stop(0);
-  while (M5Cardputer.Speaker.isPlaying(0)) vTaskDelay(2);
+  speakerDrain();
   aFile.close();
   mp3Free();
   store::pin(false);
@@ -404,7 +427,10 @@ static int au_record(lua_State *L) {
   aStop = false;
   aMode = A_REC;
   // 8 KB: SD writes (FATFS + SPI) need more than 4 KB of stack
-  xTaskCreatePinnedToCore(recTask, "rec", 8192, nullptr, 3, &aTask, 0);
+  if (!startAudioTask(recTask, "rec")) {
+    aMode = A_IDLE;
+    aFile.close(); micClose(); store::pin(false); lua_pushboolean(L, 0); lua_pushstring(L, "not enough memory to record"); return 2;
+  }
   lua_pushboolean(L, 1);
   return 1;
 }
@@ -420,14 +446,22 @@ static int au_play(lua_State *L) {
   aPaused = false;
   aSeekTo = lua_isnumber(L, 2) && lua_tonumber(L, 2) > 0 ? (int32_t)lua_tonumber(L, 2) : -1;
   if (lower.endsWith(".mp3")) {
+    aStop = false;
+    if (!startAudioTask(mp3Task, "mp3")) {
+      aFile.close(); lua_pushboolean(L, 0); lua_pushstring(L, "not enough memory to play"); return 2;
+    }
     const char *why = mp3Start();
-    if (*why) { aFile.close(); lua_pushboolean(L, 0); lua_pushstring(L, why); return 2; }
+    if (*why) {
+      aStop = true;  // the waiting task exits
+      xTaskNotifyGive(aTask);
+      aTask = nullptr;
+      aFile.close(); lua_pushboolean(L, 0); lua_pushstring(L, why); return 2;
+    }
     aSamples = 0;
     store::pin(true);
     useSpeaker();
-    aStop = false;
     aMode = A_PLAY;
-    xTaskCreatePinnedToCore(mp3Task, "mp3", 8192, nullptr, 3, &aTask, 0);
+    xTaskNotifyGive(aTask);
     lua_pushboolean(L, 1);
     return 1;
   }
@@ -466,7 +500,10 @@ static int au_play(lua_State *L) {
   useSpeaker();
   aStop = false;
   aMode = A_PLAY;
-  xTaskCreatePinnedToCore(playTask, "play", 8192, nullptr, 3, &aTask, 0);
+  if (!startAudioTask(playTask, "play")) {
+    aMode = A_IDLE;
+    aFile.close(); store::pin(false); lua_pushboolean(L, 0); lua_pushstring(L, "not enough memory to play"); return 2;
+  }
   lua_pushboolean(L, 1);
   return 1;
 }
