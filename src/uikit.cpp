@@ -349,7 +349,11 @@ static int l_fit(lua_State *L) {
   return 1;
 }
 static int l_wrap(lua_State *L) {
-  auto lines = wrap(luaL_tolstring(L, 1, nullptr), I(L, 2), OI(L, 3, 1));
+  // the width and size first: luaL_tolstring pushes its result, which would
+  // otherwise be read as argument 3
+  int w = I(L, 2), size = OI(L, 3, 1);
+  auto lines = wrap(luaL_tolstring(L, 1, nullptr), w, size);
+  lua_pop(L, 1);
   lua_createtable(L, lines.size(), 0);
   for (size_t i = 0; i < lines.size(); i++) { lua_pushstring(L, lines[i].c_str()); lua_rawseti(L, -2, i + 1); }
   return 1;

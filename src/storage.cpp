@@ -128,7 +128,14 @@ static void scanOverrides() {
 
 bool begin() {
   SPI.begin(40, 39, 14, 12);
-  if (sdMount()) {
+  // a few tries: after a crash the card can still be mid-transfer
+  bool mountedSd = sdMount();
+  for (int i = 0; i < 3 && !mountedSd; i++) {
+    SD.end();
+    delay(150);
+    mountedSd = sdMount();
+  }
+  if (mountedSd) {
     fsys = &SD;
     sdOk = true;
     mounted = true;

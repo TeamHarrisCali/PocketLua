@@ -253,21 +253,20 @@ int request(const char *method, const String &path, const String &body, Json &js
   WiFiClient tcp;
   if (!tcp.connect("discord.com", 443)) return -4;
   busy = true;
-  // Full speed for the request: normal priority, with core 0's idle task off
-  // the watchdog meanwhile (BearSSL's math doesn't yield, and at idle priority
-  // it was too slow for Discord's handshake timeout). Every wait below has a
-  // 10 s timeout, so a stuck request still ends.
-  TaskHandle_t idle0 = xTaskGetIdleTaskHandleForCore(0);
-  bool unwatched = esp_task_wdt_delete(idle0) == ESP_OK;
+  // Full speed for the request: normal priority, with the task watchdog not
+  // checking core 0's idle task meanwhile (BearSSL's math doesn't yield; the
+  // watchdog panics after 5 s). Restored after; every wait below has a 10 s
+  // timeout, so a stuck request still ends.
+  esp_task_wdt_config_t off = {5000, 0, true}, on = {5000, 1u << 0, true};  // sdkconfig: 5 s, CPU0 idle, panic
+  esp_task_wdt_reconfigure(&off);
   vTaskPrioritySet(nullptr, 1);
   struct Restore {
-    TaskHandle_t idle;
-    bool watch;
+    esp_task_wdt_config_t cfg;
     ~Restore() {
       vTaskPrioritySet(nullptr, tskIDLE_PRIORITY);
-      if (watch) esp_task_wdt_add(idle);
+      esp_task_wdt_reconfigure(&cfg);
     }
-  } restore{idle0, unwatched};
+  } restore{on};
   discordTrustAnchors(tls->tas);
   discordTlsInit(&tls->sc, &tls->xc, tls->tas, DISCORDTRUSTANCHORS_COUNT);
   br_ssl_engine_set_buffer(&tls->sc.eng, iobuf, BR_SSL_BUFSIZE_MONO, 0);  // one buffer, both directions
@@ -295,7 +294,8 @@ int request(const char *method, const String &path, const String &body, Json &js
   };
   if (br_sslio_write_all(&io, req.c_str(), req.length()) < 0 || br_sslio_flush(&io) < 0) {
     usbdev::log(String("discord: TLS handshake failed, BearSSL error ") + br_ssl_engine_last_error(&tls->sc.eng) +
-                (ioError.length() ? " (" + ioError + ")" : String("")) + timing() +
+                (ioError.length() ? " (" + ioError + ")" : String("")) + timing() + " stack left=" +
+                uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t) +
                 " heap free=" + heap_caps_get_free_size(MALLOC_CAP_8BIT) + " largest=" +
                 heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     tcp.stop();
@@ -305,7 +305,8 @@ int request(const char *method, const String &path, const String &body, Json &js
   static bool shown = false;  // the margin, once per boot
   if (!shown) {
     shown = true;
-    usbdev::log(String("discord: connected (BearSSL)") + timing() + " heap free=" + heap_caps_get_free_size(MALLOC_CAP_8BIT) +
+    usbdev::log(String("discord: connected (BearSSL)") + timing() + " stack left=" +
+                uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t) + " heap free=" + heap_caps_get_free_size(MALLOC_CAP_8BIT) +
                 " largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + " arena free=" + vm::arenaFree());
   }
   int status = 0;
@@ -463,7 +464,7 @@ void taskMain(void *) {
 }
 
 // The task's stack (the TLS handshake runs on it), from the heap or the arena.
-const size_t STACK_WORDS = 8192 / sizeof(StackType_t);
+const size_t STACK_WORDS = 12288 / sizeof(StackType_t);  // BearSSL's 31-bit math needed more than 8 KB
 StackType_t *stack = nullptr;
 StaticTask_t tcb;
 TaskHandle_t handle = nullptr;  // stays set until the stack can be returned
