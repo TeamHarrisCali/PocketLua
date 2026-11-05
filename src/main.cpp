@@ -5,6 +5,7 @@
 // spare app slot; still a normal app image, so M5Launcher can also start it.
 #include <esp_system.h>
 #include <esp_ota_ops.h>
+#include <driver/gpio.h>
 #include <M5Cardputer.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
@@ -253,6 +254,9 @@ static const char *resetReason() {
 }
 
 static void osMain() {
+  // after deep sleep (Fn+S) the backlight pin is still held low
+  gpio_hold_dis(GPIO_NUM_38);
+  gpio_deep_sleep_hold_dis();
   auto cfg = M5.config();
   cfg.internal_mic = true;  // configures the codec pins; started only when an app records
   logHeap("start");

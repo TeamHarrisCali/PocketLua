@@ -10,7 +10,10 @@
 #include <time.h>
 #include <vector>
 #include "bindings.h"
+#include <driver/rtc_io.h>
+#include <esp_sleep.h>
 #include "embedded.h"
+#include "mesh.h"
 #include "hw.h"
 #include "storage.h"
 #include "uikit.h"
@@ -1044,6 +1047,7 @@ static void openHelp() {
   helpAdd("Fn+N", "Notifications");
   helpAdd("Fn+P", "Screenshot");
   helpAdd("Fn+L", "Lock");
+  helpAdd("Fn+S", "Sleep (G0 wakes)");
   helpAdd("Fn+- =", "Volume down / up");
   helpAdd("Fn+;.,/", "Arrow keys");
   helpAdd("Fn+`", "Esc");
@@ -1087,6 +1091,36 @@ static void notesKey(const Key &k) {
     openDialog(DLG_ALERT, notes[notesSel - 1].title, notes[notesSel - 1].body.length() ? notes[notesSel - 1].body : "(no details)");
   } else if (k.text && tolower(k.text[0]) == 'c') notes.clear();
   else if (key == "esc") overlay = OV_NONE;
+}
+
+// ================================================================ deep sleep (Fn+S)
+// Everything off but the chip's low-power core, which waits for the G0 button
+// (the one that means Home). Waking is a restart: the app was saved and
+// closed, settings written, so the device comes back where things were kept.
+static bool sleepRequested = false;
+
+static void deepSleep() {
+  usbdev::log("sleep: deep sleep, G0 wakes");
+  auto &d = M5Cardputer.Display;
+  d.fillScreen(col.bg);
+  d.setTextColor(col.text);
+  d.drawCentreString("Sleeping", 120, 52);
+  d.setTextColor(col.muted);
+  d.drawCentreString("Press G0 to wake", 120, 70);
+  closeApp(true);
+  mesh::stop();
+  if (WiFi.getMode() != WIFI_OFF) wifiEnable(false);
+  hwSleepPrepare();
+  settingsFlush();
+  delay(900);
+  d.sleep();
+  gpio_hold_en(GPIO_NUM_38);  // backlight off while asleep (main.cpp releases it)
+  gpio_deep_sleep_hold_en();
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
+  rtc_gpio_pullup_en(GPIO_NUM_0);
+  rtc_gpio_pulldown_dis(GPIO_NUM_0);
+  delay(50);
+  esp_deep_sleep_start();
 }
 
 // ================================================================ screenshots
@@ -1265,6 +1299,7 @@ static void conLine(String line) {
       reply("!end");
     } else if (cmd == "fput") conPut(arg);
     else if (cmd == "pins") reply(hwProbe());
+    else if (cmd == "sleep") { reply("sleeping: press G0 to wake"); sleepRequested = true; }
     else if (cmd == "bench") { reply("benchmarking crypto (a few seconds)..."); reply(tlsBench()); }
     else if (cmd == "run") { launch(arg); reply("ok"); }
     else if (cmd == "ls") { for (auto &e : store::list(arg)) reply(String(e.dir ? "d " : "- ") + e.name); }
@@ -1415,7 +1450,8 @@ void begin(bool safeMode) {
               (safe ? " (safe mode: skipped)" : ""));
   if (!safe && ssid.length() && autoOn) wifiStartSvc(ssid, cget("wifi_pass"), true);
   if (safe) toast("Safe mode: no background services", 4);
-  sound("boot");
+  if (esp_reset_reason() == ESP_RST_DEEPSLEEP) usbdev::log("woke from deep sleep");
+  else sound("boot");  // waking from sleep is quiet
   // after a firmware update from the App Store: did the new build start?
   String expect = cget("fw_expect");
   if (expect.length()) {
@@ -1434,6 +1470,7 @@ void requestHome() { pendingHomeFlag = true; }  // called from inside Lua: defer
 void runPending();
 
 void update(float dt) {
+  if (sleepRequested) { sleepRequested = false; deepSleep(); }
   if (pendingHomeFlag) { pendingHomeFlag = false; goHome(); }
   // The App Store's downloads need the RAM an open app uses: close it, do the
   // work (appstore.cpp draws its own progress), then open the store again.
@@ -1553,6 +1590,7 @@ void key(const Key &k) {
     if (c == 'p') { screenshot(); return; }
     if (c == 'l') { if (cget("lock") != "0") overlay = OV_LOCK; return; }
     if (c == 'h') { if (overlay == OV_HELP) { overlay = OV_NONE; helpRows.clear(); } else openHelp(); return; }
+    if (c == 's') { sleepRequested = true; return; }  // in update(), outside any key handling
     if (c == '-' || c == '_' || c == '=' || c == '+') { volumeKey(c == '=' || c == '+' ? 1 : -1); return; }
   }
   if (dlg.kind != DLG_NONE) { dialogKey(k); return; }

@@ -53,6 +53,7 @@ Store-only apps (not built into the firmware) go in `store/apps/`.
 | Fn+N | Notification center |
 | Fn+P | Screenshot, saved as a BMP in `data/screenshots` |
 | Fn+L | Lock screen |
+| Fn+S | Sleep (deep sleep, almost no battery use); the G0 button wakes it, back at the home screen |
 | Fn+`-` / Fn+`=` | Volume down / up, from anywhere |
 | Hold `S` at boot | Safe mode (built-in system only) |
 

@@ -16,6 +16,9 @@ void hwAudioBegin();
 // The volume setting (0-255 "vol") applied: in the codec on the ADV.
 void hwSetVolume(int raw);
 
+// Stops audio and the radios and powers the codec and IMU down (deep sleep).
+void hwSleepPrepare();
+
 // Long blocking calls (HTTP, LoRa send, ...) reset the script time budget so
 // they are not mistaken for a hung script. Provided by main.cpp.
 void luaBudgetReset();
