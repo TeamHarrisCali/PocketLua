@@ -1161,6 +1161,21 @@ void hwReleaseDrivers() {
   loraOff();
   gpsOff();
 }
+
+// Before deep sleep: playback and recording stopped, the speaker driver
+// released, the codec and the IMU powered down, LoRa and GPS off.
+void hwSleepPrepare() {
+  audioStop();
+  spkHeld = false;
+  if (M5Cardputer.Speaker.isRunning()) M5Cardputer.Speaker.end();
+  micClose();
+  if (codecVolume()) {
+    static const uint8_t off[][2] = {{0x32, 0x00}, {0x13, 0x00}, {0x12, 0x02}, {0x0D, 0xFC}};
+    for (auto &r : off) M5.In_I2C.writeRegister8(ES8311, r[0], r[1], 400000);
+  }
+  hwReleaseDrivers();
+  M5.Imu.sleep();
+}
 // read() -> table with valid, lat, lon, alt, sats, hdop, speed (km/h), course,
 // time ("hh:mm:ss" UTC), date ("yyyy-mm-dd"), chars (NMEA characters seen)
 static int gp_read(lua_State *L) {
