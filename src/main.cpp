@@ -258,6 +258,7 @@ static void osMain() {
   logHeap("start");
   M5Cardputer.begin(cfg, true);
   M5Cardputer.Speaker.end();  // started on the first sound
+  hwAudioBegin();             // ...with our pop-free on/off step
   M5Cardputer.Mic.end();
   M5Cardputer.Display.setRotation(1);
   M5Cardputer.Display.setFont(&fonts::Font0);

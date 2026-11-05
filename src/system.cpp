@@ -31,6 +31,7 @@ void appstoreBoot();  // at boot: drop card copies that hide built-in system fil
 void hwReleaseAudio();  // hw.cpp: speaker and mic off when idle
 void hwReleaseDrivers();  // hw.cpp: LoRa and GPS off
 bool hwAudioBusy();       // hw.cpp: recording or playing
+String hwProbe();         // hw.cpp: pin levels, for the USB console's !pins
 
 String tlsBench();  // tlsbench.cpp: crypto speed test (USB console !bench)
 
@@ -1261,6 +1262,7 @@ static void conLine(String line) {
       for (size_t i = 0; i < n; i += 768) reply("!data " + b64encode(p + i, min((size_t)768, n - i)));
       reply("!end");
     } else if (cmd == "fput") conPut(arg);
+    else if (cmd == "pins") reply(hwProbe());
     else if (cmd == "bench") { reply("benchmarking crypto (a few seconds)..."); reply(tlsBench()); }
     else if (cmd == "run") { launch(arg); reply("ok"); }
     else if (cmd == "ls") { for (auto &e : store::list(arg)) reply(String(e.dir ? "d " : "- ") + e.name); }

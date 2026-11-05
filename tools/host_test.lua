@@ -144,10 +144,18 @@ disp = { image = rec("image", true), fill = rec("dfill"), text = rec("dtext") }
 audio.pause = function(on) return on end
 audio.seek = rec("seek")
 audio.tags = function() return {} end
+local EQ = { { id = "flat", name = "Flat" }, { id = "warm", name = "Warm" }, { id = "soft", name = "Less treble" } }
+audio.eq_presets = function() return EQ end
+audio.eq = function(id)
+  if id then audio.eq_now = id end
+  local cur = audio.eq_now or "flat"
+  for _, p in ipairs(EQ) do if p.id == cur then return p.id, p.name end end
+  return "flat", "Flat"
+end
 appstore = { list = function() return nil end, run = rec("store_run"), result = function() return "" end,
   channel = function() return "beta" end }
 musiclib = { info = function() return nil end, rows = function() return {} end, item = function() end,
-  albums_in = function() return {} end, scan = function() return true end,
+  albums_in = function() return {} end, scan = function() return true end, find = function() return nil end,
   scan_status = function() return "done", 0, "" end }
 
 -- the device creates these on first use (sys.hwlib); keep copies for that

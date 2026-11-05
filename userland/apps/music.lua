@@ -12,9 +12,12 @@ app.help = {
   { ",/", "Prev / next track" },
   { "[ ]", "Back / ahead 10 s" },
   { "-=", "Volume" },
-  { "S", "Shuffle (Now Playing)" },
-  { "R", "Repeat (Now Playing)" },
-  { "Enter", "Open / play" },
+  { "Tab", "Now Playing / lists" },
+  { "A", "Song's album (NP)" },
+  { "T", "Song's artist (NP)" },
+  { "E", "Equalizer (NP)" },
+  { "S", "Shuffle (NP)" },
+  { "R", "Repeat (NP)" },
   { "A-Z", "Jump in a list" },
   { "Esc", "Back / lists" },
 }
@@ -38,6 +41,7 @@ local done, total, grace = 0, 0, 0
 local shuffle, rpt = false, "off"
 local hist = {}                -- shuffle history, for "previous"
 local vol = 100
+local eq_name = "Flat"         -- the equalizer preset (native, audio.eq)
 local idle, save_t = 0, 0
 
 local function mmss(s)
@@ -239,6 +243,53 @@ local function jump(ch)
   end
 end
 
+-- The library row of the song playing (nil when it plays from a folder).
+local function current_row()
+  if not q or q.kind == "dir" then return nil end
+  local row = q.first + q.pos - 1
+  if q.kind == "grange" then row = musiclib.item("gtracks", row) end
+  return row
+end
+
+-- Opens the current song's album or artist as if picked from the menu, so
+-- Esc goes back up through that list. From a folder: the folder (album) or
+-- the folder above it (artist).
+local function goto_song(kind)
+  if not np then shell.toast("Nothing playing"); return end
+  local row = current_row()
+  stack, L = {}, nil
+  if not row then
+    local d = kind == "albums" and q.dir or parent(q.dir)
+    open_list(dir_list(d))
+    if kind == "albums" then
+      for i, n in ipairs(L.names) do if n == q.names[q.pos] then L.sel = i end end
+    end
+    return
+  end
+  local i = musiclib.find(kind, row)
+  if not i then shell.toast("Not in the library"); view = "menu"; return end
+  open_list(lib_list(kind, kind == "albums" and "Albums" or "Artists"))
+  L.sel = i
+  enter(i)  -- the album's tracks, or the artist's albums
+  if kind == "albums" then
+    local _, _, first = musiclib.item("albums", i)
+    L.sel = math.max(1, math.min(L.count, row - first + 1))
+  else
+    for j, a in ipairs(L.all) do
+      if row >= a.first and row < a.first + a.count then L.sel = j end
+    end
+  end
+end
+
+local function next_eq()
+  local list, cur = audio.eq_presets(), audio.eq()
+  local k = 1
+  for i, p in ipairs(list) do if p.id == cur then k = i % #list + 1 end end
+  local _, name = audio.eq(list[k].id)
+  eq_name = name
+  shell.toast("Equalizer: " .. name, 1.5)
+end
+
 local function build_menu()
   menu = { { "Now Playing", "playing" } }
   if lib then
@@ -307,6 +358,8 @@ function app.init(args)
   shell.focus(true)
   math.randomseed(sys.millis())
   vol = tonumber(cfg.get("vol")) or 100
+  local _, name = audio.eq()
+  eq_name = name or "Flat"
   shuffle = cfg.get("music_shuffle") == "1"
   rpt = cfg.get("music_repeat") or "off"
   lib = musiclib.info()
@@ -367,8 +420,9 @@ local function draw_playing()
   ui.right(234, 92, total > 0 and mmss(total) or "", col.muted)
   ui.text(6, 106, state == "playing" and "Playing" or state == "stopped" and "Stopped" or "Paused",
     state == "playing" and col.good or col.muted)
+  ui.center(106, eq_name ~= "Flat" and ("EQ " .. eq_name) or "", col.muted)
   ui.right(234, 106, string.format("VOL %d%%", math.floor(vol * 100 / 255 + 0.5)), col.muted)
-  ui.footer({ { "Spc", state == "playing" and "Pause" or "Play" }, { ",/", "Skip" }, { "[]", "Seek" }, { "Esc", "Lists" } })
+  ui.footer({ { "Spc", state == "playing" and "Pause" or "Play" }, { "A", "Album" }, { "T", "Artist" }, { "E", "EQ" } })
 end
 
 function app.draw()
@@ -420,10 +474,17 @@ function app.key(k)
   end
   if c == "=" or c == "+" then set_volume(vol + 16); return true end
   if c == "-" or c == "_" then set_volume(vol - 16); return true end
+  if k.key == "tab" then
+    if view == "playing" then view = L and "list" or "menu" else view = "playing" end
+    return true
+  end
   if view == "playing" then
     if k.key == "enter" then toggle_pause()
     elseif d == "up" then set_volume(vol + 16)
     elseif d == "down" then set_volume(vol - 16)
+    elseif c == "a" then goto_song("albums")
+    elseif c == "t" then goto_song("artists")
+    elseif c == "e" then next_eq()
     elseif c == "s" then shuffle, hist = not shuffle, {}; cfg.set("music_shuffle", shuffle and "1" or "0")
     elseif c == "r" then
       rpt = rpt == "off" and "all" or rpt == "all" and "one" or "off"

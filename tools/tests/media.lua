@@ -241,6 +241,12 @@ musiclib = {
     if r then return table.unpack(r) end
   end,
   albums_in = function(first, count) return { { label = "Gold", value = "2", first = first, count = count } } end,
+  find = function(kind, row)
+    for i, r in ipairs(kind == "artists" and ART or ALB) do
+      local first, count = r[#r - 1], r[#r]
+      if row >= first and row < first + count then return i end
+    end
+  end,
 }
 __hw_musiclib = musiclib
 cfg.set("music_resume", nil)
@@ -258,6 +264,25 @@ check(has(screen(), "Dancing Queen") and has(screen(), "Waterloo"), "music: an a
 key("down"); key("enter")
 check(last("play")[2] == "data/music/Abba/Gold/02 Waterloo.mp3", "music: plays a library track")
 check(has(screen(), "Waterloo") and has(screen(), "ABBA") and has(screen(), "Gold"), "music: Now Playing shows the tags")
+key("tab")
+check(not has(screen(), "NOW PLAYING") and has(screen(), "Dancing Queen"), "music: Tab goes from Now Playing to the list")
+key("tab")
+check(has(screen(), "NOW PLAYING"), "music: Tab comes back to Now Playing")
+key("e")
+check(audio.eq_now == "warm" and has(screen(), "EQ Warm"), "music: E switches the equalizer preset")
+key("e"); key("e")
+check(audio.eq_now == "flat" and not has(screen(), "EQ "), "music: E cycles back to Flat")
+key("a")
+s = screen()
+check(has(s, "Gold") and has(s, "2/2") and has(s, "Waterloo"), "music: A opens the song's album at the song")
+key("esc")
+check(has(screen(), "Albums") and has(screen(), "1/2"), "music: Esc from it goes to Albums at that album")
+key("tab"); key("t")
+s = screen()
+check(has(s, "ABBA") and has(s, "Gold"), "music: T opens the song's artist")
+key("esc")
+check(has(screen(), "Artists"), "music: Esc from it goes to Artists")
+key("enter"); key("enter"); key("tab")  -- Artists > ABBA > Gold, then Now Playing, as the tests below expect
 key("esc"); key("esc"); key("esc"); key("esc")
 key("down"); key("down"); key("enter")
 check(has(screen(), "Pop") and has(screen(), "Rock"), "music: Genres lists the genres")
