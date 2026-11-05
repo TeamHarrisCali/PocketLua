@@ -47,9 +47,9 @@ static uint32_t spkLastUse = 0;
 static const size_t ABUF = 1024;  // samples per buffer
 static void eqProcess(int16_t *s, int n, int ch, uint32_t rate);  // the equalizer, below
 
-// How much of its 6 KB stack an audio task never touched (logged as it ends).
+// How much of its stack an audio task never touched (logged as it ends).
 static void logAudioStack(const char *what) {
-  usbdev::log(String("audio: ") + what + " task left " + uxTaskGetStackHighWaterMark(nullptr) + " of 6144 stack bytes unused");
+  usbdev::log(String("audio: ") + what + " task left " + uxTaskGetStackHighWaterMark(nullptr) + " stack bytes unused");
 }
 
 // The ADV's mic goes through an ES8311 codec that shares its I2S pins with the
@@ -313,10 +313,12 @@ static void speakerDrain() {
 
 // Starts an audio task, or logs why it couldn't (its stack is 8 KB in one
 // block, which a fragmented heap may not have).
-static bool startAudioTask(TaskFunction_t fn, const char *name) {
-  // 6 KB: the decoder works in its heap buffers; its largest local array is
-  // 768 bytes (the log shows what each run used, see logAudioStack)
-  if (xTaskCreatePinnedToCore(fn, name, 6144, nullptr, 3, &aTask, 0) == pdPASS) return true;
+// Playback measured at most ~1.7 KB of stack (the decoder works in its heap
+// buffers), so it gets 4 KB; recording keeps 6 KB until it is measured too.
+// The log shows what each run left unused (logAudioStack).
+static const uint32_t PLAY_STACK = 4096, REC_STACK = 6144;
+static bool startAudioTask(TaskFunction_t fn, const char *name, uint32_t stack) {
+  if (xTaskCreatePinnedToCore(fn, name, stack, nullptr, 3, &aTask, 0) == pdPASS) return true;
   aTask = nullptr;
   usbdev::log(String("audio: no memory for the ") + name + " task, heap free=" + heap_caps_get_free_size(MALLOC_CAP_8BIT) +
               " largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
@@ -684,7 +686,7 @@ static int au_record(lua_State *L) {
   aStop = false;
   aMode = A_REC;
   // 8 KB: SD writes (FATFS + SPI) need more than 4 KB of stack
-  if (!startAudioTask(recTask, "rec")) {
+  if (!startAudioTask(recTask, "rec", REC_STACK)) {
     aMode = A_IDLE;
     aFile.close(); micClose(); store::pin(false); lua_pushboolean(L, 0); lua_pushstring(L, "not enough memory to record"); return 2;
   }
@@ -708,7 +710,7 @@ static int au_play(lua_State *L) {
   spkHeld = true;
   if (lower.endsWith(".mp3")) {
     aStop = false;
-    if (!startAudioTask(mp3Task, "mp3")) {
+    if (!startAudioTask(mp3Task, "mp3", PLAY_STACK)) {
       aFile.close(); lua_pushboolean(L, 0); lua_pushstring(L, "not enough memory to play"); return 2;
     }
     const char *why = mp3Start();
@@ -761,7 +763,7 @@ static int au_play(lua_State *L) {
   fadeIn();
   aStop = false;
   aMode = A_PLAY;
-  if (!startAudioTask(playTask, "play")) {
+  if (!startAudioTask(playTask, "play", PLAY_STACK)) {
     aMode = A_IDLE;
     aFile.close(); store::pin(false); lua_pushboolean(L, 0); lua_pushstring(L, "not enough memory to play"); return 2;
   }
