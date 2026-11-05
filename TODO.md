@@ -14,6 +14,23 @@ Open issues found on the device. Newest first.
 
 ## Planned
 
+- **Helper board: Seeed XIAO ESP32-S3 Sense on the Grove port** (user, 2026-11-05). Wiring: Grove GND→GND,
+  5V→5V, G2→D7 (RX), G1→D6 (TX); a serial link of a few Mbit/s. The XIAO has 8 MB PSRAM, Wi-Fi/BLE, and
+  on the Sense board a camera, a PDM mic and a microSD slot. The Cardputer pings it at boot and falls
+  back to its own Wi-Fi when it isn't there. Steps: (1) link + ping, (2) Wi-Fi through the helper,
+  (3) HTTP/HTTPS, (4) App Store downloads. Ideas once it works:
+  - System: network helper (Wi-Fi + TLS off the Cardputer: ~60 KB back, Wi-Fi on during Music, https
+    for apps, no restart-first store downloads); firmware updates downloaded and checked on the helper,
+    then streamed in; a wireless file manager (web page: upload music, browse files, edit apps, live
+    log); JPEG/PNG decoding on the helper (photos, album art); backups mirrored to its SD card;
+    background services (daily store check, time, weather) that post notifications.
+  - Features: camera app (live preview, photos); QR scanner (join Wi-Fi from a QR code, save links);
+    internet radio and podcasts (helper streams, Cardputer decodes); offline voice commands (ESP-SR);
+    better voice notes (Sense mic); Bluetooth keyboard/mouse for a phone, BLE scanner, maybe phone
+    notifications; Home Assistant / MQTT panel; an AI chat app with the user's own API key.
+  - Order suggested: link, network helper, wireless file manager, QR scanner. Mind the battery
+    (camera and Wi-Fi draw a lot) and the link speed (fine for data and small previews).
+
 - **Flash space** was ~90% used (2026-11-04). If it runs short, compress the
   embedded sources: the device runs the bytecode, and only the editor reads the source, so about
   270 KB of it could shrink. Also check how large an app M5Launcher accepts.
