@@ -66,7 +66,7 @@ Store-only apps (not built into the firmware) go in `store/apps/`.
 | Category | Apps |
 |---|---|
 | System | Settings, Task Manager, Files, App Store |
-| Tools | Clock (alarms, timer, stopwatch, Pomodoro), Notes and To-do, Calculator and unit converter, Lua REPL, Morse, Steps, Sensors (Grove I2C), Level, Hello |
+| Tools | Clock (alarms with repeat days and snooze, timers, stopwatch, Study: Pomodoro with stats), Notes and To-do, Calculator and unit converter, Lua REPL, Morse, Steps, Sensors (Grove I2C), Level, Hello |
 | Media | Recorder, Music (WAV), Sound Lab (level, spectrum, tuner), Beat Box, Piano, Images |
 | Games | Snake, Blocks, 2048, Marble (tilt maze), Adventure |
 | Net | Weather, Network (scan, DNS, ping), IR Remote, Air Mouse, LoRa Chat, GPS, Nearby, USB Keys, USB Serial |
@@ -78,7 +78,7 @@ LoRa Chat and GPS need the Cap LoRa-1262. Air Mouse and USB Keys need Settings >
 - **Themes:** Slate, Midnight, Paper, Terminal and Sunset, plus an accent colour (Settings > Display). Every app uses the shared toolkit, so it follows the theme. See `docs/UI.md`.
 - **Lock screen and display sleep:** set the sleep time in Settings > Display; any key wakes the screen.
 - **Notifications:** apps, alarms, timers and the low-battery warning post to the notification center. A dot in the status bar means unread.
-- **Background timers and daily alarms** keep running whichever app is open.
+- **Alarms and timers** keep running whichever app is open, ring full screen until stopped (Enter) or snoozed (any key, 1 min at first), and wake the Cardputer from sleep (Fn+S). The sleep clock has no crystal and can drift; after a wake with Wi-Fi the error is measured and later sleeps correct for it.
 - **Resume:** apps remember where you were. Files open in the app that handles their type (`.txt`, `.lua` editor; `.wav` Music; `.bmp`, `.jpg`, `.png` Images).
 - **System sounds** (Settings > Sound), a 12-hour clock option, and screenshots.
 - **Volume** moves in 20 even steps (2.5 dB). **Headphone mode** (Quick settings or Settings > Sound) keeps its own volume and stops at a maximum you set; the board can't sense the jack, so it is switched by hand.

@@ -120,8 +120,10 @@ The mic and speaker cannot run at the same time; the drivers switch between them
 | `shell.notify(title[, body])` | Message kept in the notification center |
 | `shell.alert(title, msg[, cb])`, `shell.confirm(title, msg, cb)` | Information; yes/no |
 | `shell.prompt(title, default, cb[, {secret=true}])`, `shell.menu(title, items, cb)` | Text input; choose from a list |
-| `shell.start_timer(seconds, label)` | Background countdown. Returns a handle (`left`, `total`, `label`, optional `done` callback); fires a notification and alarm sound |
-| `shell.cancel_timer(handle)`, `shell.timers` | Cancel a timer; list of running timers |
+| `shell.start_timer(seconds, label[, opts])` | Background countdown. Returns a handle (`id`, `label`). When it ends it rings full screen (Enter stops, any key snoozes). `opts` makes it a Pomodoro phase: `{pomo="work", work=, rest=, every=, long=}` (seconds; a long break after `every` focus phases), which chimes and moves to the next phase by itself |
+| `shell.cancel_timer(t)`, `shell.pause_timer(t, on)`, `shell.finish_timer(t)` | Cancel, pause or resume, or end a timer now (a Pomodoro phase moves on) |
+| `shell.timers` | Running timers: `{id, label, left, total, paused, pomo, count, every}` (copies: change them with the functions above) |
+| `shell.study`, `shell.snooze` | Today's focus `{minutes, sessions, streak}`; when a snoozed alarm rings again ("07:31") or nil |
 | `cfg "alarms"` | Daily alarms as `"HH:MM\|label;HH:MM\|label"`. The shell checks them every minute |
 | `shell.clipboard` | Shared text clipboard |
 | `shell.free_memory()` | Drop caches and collect garbage. Returns free bytes |
