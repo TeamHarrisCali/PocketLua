@@ -888,7 +888,8 @@ static String sleepLabel(int s) {
 // Fn+- / Fn+=: volume from anywhere, one of 20 even steps.
 static void volumeKey(int d) {
   int l = volumeStep(d);
-  toast(l ? String("Volume ") + l * 5 + "%" : String("Volume off"), 1.2);
+  bool capped = d > 0 && headphones() && l == headphoneMax();
+  toast(!l ? String("Volume off") : String("Volume ") + l * 5 + "%" + (capped ? " (headphone max)" : ""), 1.2);
   if (!hwAudioBusy()) playTone(880, 50);  // something to hear, unless audio is already playing
 }
 
@@ -901,6 +902,9 @@ static void quickAdjust(int i, int d) {
     volumeStep(d);
     playTone(880, 60);
   } else if (i == 2) {
+    setHeadphones(!headphones());
+    toast(headphones() ? String("Headphones: volume up to ") + headphoneMax() * 5 + "%" : String("Speaker volume"), 2);
+  } else if (i == 3) {
     if (WiFi.getMode() == WIFI_OFF) {
       cfgSet("wifi_auto", "1");
       wifiStartSvc(cget("wifi_ssid"), cget("wifi_pass"), false);
@@ -908,13 +912,13 @@ static void quickAdjust(int i, int d) {
       cfgSet("wifi_auto", "0");
       wifiEnable(false);
     }
-  } else if (i == 3) {
+  } else if (i == 4) {
     int idx = 0;
     for (int t = 0; t < ui::THEME_COUNT; t++) if (ui::themeName == ui::THEMES[t]) idx = t;
     idx = (idx + d + ui::THEME_COUNT) % ui::THEME_COUNT;
     cfgSet("theme", ui::THEMES[idx]);
     ui::setTheme(ui::THEMES[idx]);
-  } else if (i == 4) {
+  } else if (i == 5) {
     int idx = 2;
     for (int t = 0; t < 6; t++) if (SLEEP_OPTS[t] == sleepAfter) idx = t;
     idx = (idx + d + 6) % 6;
@@ -931,25 +935,25 @@ static void quickKey(const Key &k) {
   bool left = key == "left" || (k.text && k.text[0] == ','), right = key == "right" || (k.text && k.text[0] == '/');
   if (up) quickSel = (quickSel + 7) % 8;
   else if (down) quickSel = (quickSel + 1) % 8;
-  else if ((left || right) && quickSel <= 4) quickAdjust(quickSel, left ? -1 : 1);
+  else if ((left || right) && quickSel <= 5) quickAdjust(quickSel, left ? -1 : 1);
   else if (key == "enter") {
-    if (quickSel <= 4) quickAdjust(quickSel, 1);
-    else if (quickSel == 5) { overlay = OV_NOTES; ui::status.unread = 0; notesSel = notesTop = 1; }
-    else if (quickSel == 6) { overlay = OV_NONE; screenshot(); }
+    if (quickSel <= 5) quickAdjust(quickSel, 1);
+    else if (quickSel == 6) { overlay = OV_NOTES; ui::status.unread = 0; notesSel = notesTop = 1; }
     else if (quickSel == 7) { overlay = OV_NONE; launch("tasks"); }
   } else if (key == "esc") overlay = OV_NONE;
 }
 
 static void drawQuick() {
-  const char *labels[] = {"Brightness", "Volume", "Wi-Fi", "Theme", "Sleep after", "Notifications", "Screenshot", "Task Manager"};
+  // (screenshots: Fn+P from anywhere)
+  const char *labels[] = {"Brightness", "Volume", "Headphones", "Wi-Fi", "Theme", "Sleep after", "Notifications", "Task Manager"};
   String vals[8];
   vals[0] = String(cget("bright", "160").toInt() * 100 / 255) + "%";
   vals[1] = String(volumeLevel(cget("vol", "100").toInt()) * 5) + "%";
-  vals[2] = WiFi.getMode() == WIFI_OFF ? "Off" : (WiFi.status() == WL_CONNECTED ? "Connected" : "On");
-  vals[3] = ui::themeName;
-  vals[4] = sleepLabel(sleepAfter);
-  vals[5] = String(ui::status.unread) + " new";
-  vals[6] = "Fn+P";
+  vals[2] = headphones() ? "On" : "Off";
+  vals[3] = WiFi.getMode() == WIFI_OFF ? "Off" : (WiFi.status() == WL_CONNECTED ? "Connected" : "On");
+  vals[4] = ui::themeName;
+  vals[5] = sleepLabel(sleepAfter);
+  vals[6] = String(ui::status.unread) + " new";
   int x = 30, y = 18, w = 180, rh = 13;
   ui::box(x, y, w, 12 + 8 * rh);
   for (int i = 0; i < 8; i++) {
@@ -1395,6 +1399,10 @@ static void services() {
 // ================================================================ entry points
 void begin(bool safeMode) {
   safe = safeMode;
+  // lists that grow while apps run get their room now, while the heap is in
+  // one piece (a failed vector growth aborts)
+  notes.reserve(21);
+  savedStates.reserve(11);
   applySettings();
   if (!safe) appstoreBoot();
   scanApps();

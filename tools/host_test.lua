@@ -157,6 +157,14 @@ snd.step = function(d)
   return l, l * 5
 end
 snd.level = function() local l = vol_level(tonumber(cfg.get("vol")) or 100); return l, l * 5, 20 end
+snd.headphones = function(on)
+  if on ~= nil then cfg.set("hp", on and "1" or "0") end
+  return cfg.get("hp") == "1", tonumber(cfg.get("hp_max") or 50)
+end
+snd.headphone_max = function(p)
+  if p then cfg.set("hp_max", math.max(5, math.min(100, p))) end
+  return tonumber(cfg.get("hp_max") or 50)
+end
 local EQ = { { id = "flat", name = "Flat" }, { id = "warm", name = "Warm" }, { id = "soft", name = "Less treble" } }
 audio.eq_presets = function() return EQ end
 audio.eq = function(id)

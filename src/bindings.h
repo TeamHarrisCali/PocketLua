@@ -16,7 +16,10 @@ void batteryInfo(int &pct, bool &charging);
 bool wifiEnable(bool on);
 size_t wifiStartCost();
 int volumeStep(int d);    // one volume level up/down (20 levels, 2.5 dB apart); returns the level
-int volumeLevel(int raw); // the level of a 0-255 "vol" setting  // bytes the next Wi-Fi start is expected to take
+int volumeLevel(int raw); // the level of a 0-255 "vol" setting
+bool headphones();        // headphone mode: own volume, capped at headphoneMax()
+int headphoneMax();       // that cap, as a level (1-20)
+void setHeadphones(bool on);  // bytes the next Wi-Fi start is expected to take
 void wifiConnect(const char *ssid, const char *pass);
 void settingsTick();   // writes data/settings.txt after changes
 void settingsFlush();  // writes now (before a reboot)

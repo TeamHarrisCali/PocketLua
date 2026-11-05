@@ -66,6 +66,13 @@ static void saveSettingsNow() {
   if (store::write(SETTINGS_FILE, out)) settingsDirty = false;
 }
 
+// New keys are added while apps run, when the heap may have no large block
+// (Music's decoder leaves ~2 KB): growing the vector then failed and aborted
+// (pressing E for the equalizer saved "eq" for the first time). So room for
+// more keys is reserved at boot, and a key that still finds no room is not
+// saved instead of crashing.
+static const size_t SPARE_KEYS = 32;
+
 static void loadSettings() {
   settingsLoaded = true;
   String text;
@@ -94,7 +101,10 @@ static void loadSettings() {
 }
 
 static std::pair<String, String> *findSetting(const char *key) {
-  if (!settingsLoaded) loadSettings();
+  if (!settingsLoaded) {
+    loadSettings();  // at boot, while the heap is in one piece
+    settings.reserve(settings.size() + SPARE_KEYS);
+  }
   for (auto &kv : settings)
     if (kv.first == key) return &kv;
   return nullptr;
@@ -108,8 +118,19 @@ String cfgGet(const char *key, const char *def) {
 void cfgSet(const char *key, const String &value) {
   auto *kv = findSetting(key);
   if (kv && kv->second == value) return;
-  if (kv) kv->second = value;
-  else settings.push_back({key, value});
+  if (kv) {
+    kv->second = value;
+  } else {
+    if (settings.size() == settings.capacity()) {
+      size_t need = (settings.capacity() + SPARE_KEYS) * sizeof(settings[0]);
+      if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < need + 2048) {
+        usbdev::log(String("settings: no room to add ") + key + " now");
+        return;
+      }
+      settings.reserve(settings.capacity() + SPARE_KEYS);
+    }
+    settings.push_back({key, value});
+  }
   settingsDirty = true;
   settingsChanged = millis();
 }
@@ -219,11 +240,37 @@ int volumeLevel(int raw) {
   int l = (int)lroundf(VOL_LEVELS + 40 * log10f(raw / 255.0f) / 2.5f);
   return constrain(l, 1, VOL_LEVELS);
 }
-int volumeStep(int d) {
-  int l = constrain(volumeLevel(cfgGet("vol", "100").toInt()) + d, 0, VOL_LEVELS);
-  int raw = volumeRaw(l);
+// Headphone mode (Quick settings, Settings > Sound): the board can't tell
+// when headphones are plugged in (the jack only mutes the speaker), so it is
+// switched by hand. Speaker and headphones keep their own volume ("vol_spk",
+// "vol_hp"; "vol" is whichever is in use) and in headphone mode the volume
+// stops at a safe maximum ("hp_max", a level, 50% at first).
+bool headphones() { return cfgGet("hp", "0") == "1"; }
+int headphoneMax() { return constrain(cfgGet("hp_max", "10").toInt(), 1, VOL_LEVELS); }
+static void applyVolume(int raw) {
   cfgSet("vol", String(raw));
   M5Cardputer.Speaker.setVolume(raw);
+}
+void setHeadphones(bool on) {
+  if (on == headphones()) return;
+  int cur = cfgGet("vol", "100").toInt();
+  cfgSet(on ? "vol_spk" : "vol_hp", String(cur));
+  String saved = cfgGet(on ? "vol_hp" : "vol_spk");
+  int raw = saved.length() ? saved.toInt() : cur;
+  if (on && volumeLevel(raw) > headphoneMax()) raw = volumeRaw(headphoneMax());
+  cfgSet("hp", on ? "1" : "0");
+  applyVolume(raw);
+}
+void setHeadphoneMax(int level) {
+  level = constrain(level, 1, VOL_LEVELS);
+  cfgSet("hp_max", String(level));
+  if (headphones() && volumeLevel(cfgGet("vol", "100").toInt()) > level) applyVolume(volumeRaw(level));
+}
+
+int volumeStep(int d) {
+  int top = headphones() ? headphoneMax() : VOL_LEVELS;
+  int l = constrain(volumeLevel(cfgGet("vol", "100").toInt()) + d, 0, top);
+  applyVolume(volumeRaw(l));
   return l;
 }
 // step(d) -> level, percent: one level up (+1) or down (-1), saved.
@@ -233,6 +280,19 @@ static int s_step(lua_State *L) {
   lua_pushinteger(L, l);
   lua_pushinteger(L, l * 100 / VOL_LEVELS);
   return 2;
+}
+// headphones([on]) -> on, max percent: headphone mode, switched when given.
+// headphone_max([percent]) -> percent: the cap in headphone mode (5% steps).
+static int s_headphones(lua_State *L) {
+  if (!lua_isnoneornil(L, 1)) setHeadphones(lua_toboolean(L, 1));
+  lua_pushboolean(L, headphones());
+  lua_pushinteger(L, headphoneMax() * 100 / VOL_LEVELS);
+  return 2;
+}
+static int s_headphone_max(lua_State *L) {
+  if (lua_isnumber(L, 1)) setHeadphoneMax((int)lroundf(lua_tonumber(L, 1) * VOL_LEVELS / 100));
+  lua_pushinteger(L, headphoneMax() * 100 / VOL_LEVELS);
+  return 1;
 }
 static int s_level(lua_State *L) {
   int l = volumeLevel(cfgGet("vol", "100").toInt());
@@ -742,7 +802,8 @@ bool openApiLib(lua_State *L, const char *name) {
       {"arc", g_arc}, {"text", g_text}, {"text_w", g_text_w}, {"clip", g_clip}, {"noclip", g_noclip},
       {"brightness", g_brightness}, {nullptr, nullptr}};
   static const luaL_Reg sndLib[] = {{"tone", s_tone}, {"stop", s_stop}, {"volume", s_volume}, {"step", s_step},
-                                    {"level", s_level}, {nullptr, nullptr}};
+                                    {"level", s_level}, {"headphones", s_headphones},
+                                    {"headphone_max", s_headphone_max}, {nullptr, nullptr}};
   static const luaL_Reg imuLib[] = {{"read", i_read}, {nullptr, nullptr}};
   static const luaL_Reg wifiLib[] = {
       {"enable", w_enable}, {"connect", w_connect}, {"disconnect", w_disconnect}, {"status", w_status},
