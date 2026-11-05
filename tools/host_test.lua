@@ -144,6 +144,19 @@ disp = { image = rec("image", true), fill = rec("dfill"), text = rec("dtext") }
 audio.pause = function(on) return on end
 audio.seek = rec("seek")
 audio.tags = function() return {} end
+-- volume in 20 levels 2.5 dB apart, as bindings.cpp does it
+local function vol_level(raw)
+  if raw <= 0 then return 0 end
+  return math.max(1, math.min(20, math.floor(20 + 40 * math.log(raw / 255, 10) / 2.5 + 0.5)))
+end
+snd.step = function(d)
+  local l = math.max(0, math.min(20, vol_level(tonumber(cfg.get("vol")) or 100) + d))
+  local raw = l == 0 and 0 or math.floor(255 * 10 ^ ((l - 20) * 2.5 / 40) + 0.5)
+  cfg.set("vol", raw)
+  snd.volume(raw)
+  return l, l * 5
+end
+snd.level = function() local l = vol_level(tonumber(cfg.get("vol")) or 100); return l, l * 5, 20 end
 local EQ = { { id = "flat", name = "Flat" }, { id = "warm", name = "Warm" }, { id = "soft", name = "Less treble" } }
 audio.eq_presets = function() return EQ end
 audio.eq = function(id)

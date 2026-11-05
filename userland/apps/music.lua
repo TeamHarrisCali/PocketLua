@@ -40,7 +40,7 @@ local state = "stopped"        -- "playing" | "paused" | "ready" (loaded, not st
 local done, total, grace = 0, 0, 0
 local shuffle, rpt = false, "off"
 local hist = {}                -- shuffle history, for "previous"
-local vol = 100
+local vol_pct = 0              -- volume as shown: one of 20 even steps (snd.step)
 local eq_name = "Flat"         -- the equalizer preset (native, audio.eq)
 local idle, save_t = 0, 0
 
@@ -325,10 +325,9 @@ local function menu_enter(id)
 end
 
 -- ---------------------------------------------------------------- app
-local function set_volume(v)
-  vol = math.max(0, math.min(255, v))
-  snd.volume(vol)
-  cfg.set("vol", vol)
+local function vol_step(d)
+  local _, pct = snd.step(d)
+  vol_pct = pct
 end
 
 -- Picks up where the last session stopped: same list, track and position.
@@ -357,7 +356,6 @@ end
 function app.init(args)
   shell.focus(true)
   math.randomseed(sys.millis())
-  vol = tonumber(cfg.get("vol")) or 100
   local _, name = audio.eq()
   eq_name = name or "Flat"
   shuffle = cfg.get("music_shuffle") == "1"
@@ -377,7 +375,8 @@ function app.init(args)
 end
 
 function app.update(dt)
-  vol = tonumber(cfg.get("vol")) or vol  -- Fn+- / Fn+= change it from the shell too
+  local _, pct = snd.level()  -- Fn+- / Fn+= change it from the shell too
+  vol_pct = pct
   if view == "scan" then
     local st, n, msg = musiclib.scan_status()
     if st == "done" or st == "failed" then
@@ -421,7 +420,7 @@ local function draw_playing()
   ui.text(6, 106, state == "playing" and "Playing" or state == "stopped" and "Stopped" or "Paused",
     state == "playing" and col.good or col.muted)
   ui.center(106, eq_name ~= "Flat" and ("EQ " .. eq_name) or "", col.muted)
-  ui.right(234, 106, string.format("VOL %d%%", math.floor(vol * 100 / 255 + 0.5)), col.muted)
+  ui.right(234, 106, string.format("VOL %d%%", vol_pct), col.muted)
   ui.footer({ { "Spc", state == "playing" and "Pause" or "Play" }, { "A", "Album" }, { "T", "Artist" }, { "E", "EQ" } })
 end
 
@@ -472,16 +471,16 @@ function app.key(k)
     if state == "playing" or state == "paused" then audio.seek(math.max(0, done + (c == "]" and 10 or -10))) end
     return true
   end
-  if c == "=" or c == "+" then set_volume(vol + 16); return true end
-  if c == "-" or c == "_" then set_volume(vol - 16); return true end
+  if c == "=" or c == "+" then vol_step(1); return true end
+  if c == "-" or c == "_" then vol_step(-1); return true end
   if k.key == "tab" then
     if view == "playing" then view = L and "list" or "menu" else view = "playing" end
     return true
   end
   if view == "playing" then
     if k.key == "enter" then toggle_pause()
-    elseif d == "up" then set_volume(vol + 16)
-    elseif d == "down" then set_volume(vol - 16)
+    elseif d == "up" then vol_step(1)
+    elseif d == "down" then vol_step(-1)
     elseif c == "a" then goto_song("albums")
     elseif c == "t" then goto_song("artists")
     elseif c == "e" then next_eq()

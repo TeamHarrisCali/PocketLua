@@ -206,6 +206,42 @@ static int s_volume(lua_State *L) {
   return 0;
 }
 
+// Volume in 20 levels 2.5 dB apart, so each step sounds the same. M5's speaker
+// squares the 0-255 setting, so equal steps of it were ~7 dB apart at low
+// volume and ~1 dB near the top. The setting stays 0-255 ("vol").
+static const int VOL_LEVELS = 20;
+int volumeRaw(int level) {
+  if (level <= 0) return 0;
+  return (int)lroundf(255 * powf(10, (level - VOL_LEVELS) * 2.5f / 40));
+}
+int volumeLevel(int raw) {
+  if (raw <= 0) return 0;
+  int l = (int)lroundf(VOL_LEVELS + 40 * log10f(raw / 255.0f) / 2.5f);
+  return constrain(l, 1, VOL_LEVELS);
+}
+int volumeStep(int d) {
+  int l = constrain(volumeLevel(cfgGet("vol", "100").toInt()) + d, 0, VOL_LEVELS);
+  int raw = volumeRaw(l);
+  cfgSet("vol", String(raw));
+  M5Cardputer.Speaker.setVolume(raw);
+  return l;
+}
+// step(d) -> level, percent: one level up (+1) or down (-1), saved.
+// level() -> level, percent, levels
+static int s_step(lua_State *L) {
+  int l = volumeStep((int)luaL_checkinteger(L, 1));
+  lua_pushinteger(L, l);
+  lua_pushinteger(L, l * 100 / VOL_LEVELS);
+  return 2;
+}
+static int s_level(lua_State *L) {
+  int l = volumeLevel(cfgGet("vol", "100").toInt());
+  lua_pushinteger(L, l);
+  lua_pushinteger(L, l * 100 / VOL_LEVELS);
+  lua_pushinteger(L, VOL_LEVELS);
+  return 3;
+}
+
 static int i_read(lua_State *L) {
   float ax = 0, ay = 0, az = 0, gx = 0, gy = 0, gz = 0;
   M5.Imu.update();
@@ -705,7 +741,8 @@ bool openApiLib(lua_State *L, const char *name) {
       {"rrect", g_rrect}, {"rfill", g_rfill}, {"circle", g_circle}, {"disc", g_disc}, {"tri", g_tri},
       {"arc", g_arc}, {"text", g_text}, {"text_w", g_text_w}, {"clip", g_clip}, {"noclip", g_noclip},
       {"brightness", g_brightness}, {nullptr, nullptr}};
-  static const luaL_Reg sndLib[] = {{"tone", s_tone}, {"stop", s_stop}, {"volume", s_volume}, {nullptr, nullptr}};
+  static const luaL_Reg sndLib[] = {{"tone", s_tone}, {"stop", s_stop}, {"volume", s_volume}, {"step", s_step},
+                                    {"level", s_level}, {nullptr, nullptr}};
   static const luaL_Reg imuLib[] = {{"read", i_read}, {nullptr, nullptr}};
   static const luaL_Reg wifiLib[] = {
       {"enable", w_enable}, {"connect", w_connect}, {"disconnect", w_disconnect}, {"status", w_status},

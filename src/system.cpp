@@ -885,13 +885,10 @@ static String sleepLabel(int s) {
   return String(s / 60) + " min";
 }
 
-// Fn+- / Fn+=: volume from anywhere, in 8 steps.
+// Fn+- / Fn+=: volume from anywhere, one of 20 even steps.
 static void volumeKey(int d) {
-  int v = constrain(cget("vol", "100").toInt() + d * 32, 0, 255);
-  if (d > 0 && v > 224) v = 255;  // the last step reaches full volume
-  cfgSet("vol", String(v));
-  M5Cardputer.Speaker.setVolume(v);
-  toast(v ? String("Volume ") + (v * 100 + 127) / 255 + "%" : String("Volume off"), 1.2);
+  int l = volumeStep(d);
+  toast(l ? String("Volume ") + l * 5 + "%" : String("Volume off"), 1.2);
   if (!hwAudioBusy()) playTone(880, 50);  // something to hear, unless audio is already playing
 }
 
@@ -901,9 +898,7 @@ static void quickAdjust(int i, int d) {
     cfgSet("bright", String(v));
     M5Cardputer.Display.setBrightness(v);
   } else if (i == 1) {
-    int v = constrain(cget("vol", "100").toInt() + d * 32, 0, 255);
-    cfgSet("vol", String(v));
-    M5Cardputer.Speaker.setVolume(v);
+    volumeStep(d);
     playTone(880, 60);
   } else if (i == 2) {
     if (WiFi.getMode() == WIFI_OFF) {
@@ -949,7 +944,7 @@ static void drawQuick() {
   const char *labels[] = {"Brightness", "Volume", "Wi-Fi", "Theme", "Sleep after", "Notifications", "Screenshot", "Task Manager"};
   String vals[8];
   vals[0] = String(cget("bright", "160").toInt() * 100 / 255) + "%";
-  vals[1] = String(cget("vol", "100").toInt() * 100 / 255) + "%";
+  vals[1] = String(volumeLevel(cget("vol", "100").toInt()) * 5) + "%";
   vals[2] = WiFi.getMode() == WIFI_OFF ? "Off" : (WiFi.status() == WL_CONNECTED ? "Connected" : "On");
   vals[3] = ui::themeName;
   vals[4] = sleepLabel(sleepAfter);

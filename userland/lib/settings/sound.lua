@@ -5,14 +5,12 @@ local push, pop, cycle, num = ctx.push, ctx.pop, ctx.cycle, ctx.num
 local function sound_page()
   local p = { title = "Sound" }
   local function vol(d)
-    local v = math.max(0, math.min(255, num("vol", 100) + d * 20))
-    cfg.set("vol", v)
-    snd.volume(v)
+    snd.step(d)  -- one of 20 even steps (2.5 dB)
     snd.tone(880, 80)
   end
   function p.rows()
     return {
-      { label = "Volume", value = math.floor(num("vol", 100) * 100 / 255) .. "%",
+      { label = "Volume", value = select(2, snd.level()) .. "%",
         left = function() vol(-1) end, right = function() vol(1) end, enter = function() vol(1) end },
       { label = "System sounds", switch = cfg.get("sounds") ~= "0", enter = function()
         cfg.set("sounds", cfg.get("sounds") == "0" and "1" or "0")
