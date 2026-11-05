@@ -4,6 +4,7 @@
 
 // Registers the sys, cfg, gfx, snd, imu, wifi, clock, usb and net tables.
 void registerApi(lua_State *L);
+bool openApiLib(lua_State *L, const char *name);  // gfx, snd, imu, wifi, usb, net, clock: made on first use
 
 // Helpers shared with the native system (system.cpp).
 String cfgGet(const char *key, const char *def = "");

@@ -19,9 +19,11 @@ static void *mp3Scratch = nullptr;
 #define MINIMP3_SCRATCH mp3Scratch
 #include <minimp3.h>
 #include "hw.h"
+#include "bindings.h"
 #include "musiclib.h"
 #include "storage.h"
 #include "usbdev.h"
+#include "vm.h"
 
 static String str(lua_State *L, int i) { return String(luaL_checkstring(L, i)); }
 static int num(lua_State *L, int i) { return (int)luaL_checknumber(L, i); }
@@ -266,30 +268,46 @@ static uint8_t *mToc = nullptr;  // Xing seek table (100 bytes), VBR files only
 static void mp3Free() {
   if (mp3Scratch) {
     mp3dec_scratch_t *sc = (mp3dec_scratch_t *)mp3Scratch;
-    free(sc->grbuf);
-    free(sc->syn);
+    vm::audioFree(sc->grbuf);
+    vm::audioFree(sc->syn);
   }
-  free(mDec); free(mp3Scratch); free(mIn); free(mPcm); free(mToc);
-  for (auto &o : mOut) { free(o); o = nullptr; }
+  vm::audioFree(mDec); vm::audioFree(mp3Scratch); vm::audioFree(mIn); vm::audioFree(mPcm); free(mToc);
+  for (auto &o : mOut) { vm::audioFree(o); o = nullptr; }
   mDec = nullptr; mp3Scratch = nullptr; mIn = nullptr; mPcm = nullptr; mToc = nullptr;
 }
 
+// Largest first, so the big blocks get the big gaps; any that the heap can't
+// hold come from the Lua arena's spare room (vm::audioAlloc).
 static bool mp3Alloc() {
-  mDec = (mp3dec_t *)malloc(sizeof(mp3dec_t));
-  mp3Scratch = calloc(1, sizeof(mp3dec_scratch_t));
+  float (*syn)[2 * 32] = (float (*)[2 * 32])vm::audioAlloc(SYN);
+  mDec = (mp3dec_t *)vm::audioAlloc(sizeof(mp3dec_t));
+  float (*grbuf)[576] = (float (*)[576])vm::audioAlloc(GRBUF);
+  mPcm = (int16_t *)vm::audioAlloc(MINIMP3_MAX_SAMPLES_PER_FRAME * 2);
+  mIn = (uint8_t *)vm::audioAlloc(MP3_IN);
+  mp3Scratch = vm::audioAlloc(sizeof(mp3dec_scratch_t));
   if (mp3Scratch) {
-    mp3dec_scratch_t *sc = (mp3dec_scratch_t *)mp3Scratch;
-    sc->grbuf = (float (*)[576])malloc(GRBUF);
-    sc->syn = (float (*)[2 * 32])malloc(SYN);
+    memset(mp3Scratch, 0, sizeof(mp3dec_scratch_t));
+    ((mp3dec_scratch_t *)mp3Scratch)->grbuf = grbuf;
+    ((mp3dec_scratch_t *)mp3Scratch)->syn = syn;
+  } else {
+    vm::audioFree(grbuf);
+    vm::audioFree(syn);
   }
-  mIn = (uint8_t *)malloc(MP3_IN);
-  mPcm = (int16_t *)malloc(MINIMP3_MAX_SAMPLES_PER_FRAME * 2);
-  for (auto &o : mOut) o = (int16_t *)malloc(MP3_FRAME * 2);
-  bool ok = mDec && mp3Scratch && ((mp3dec_scratch_t *)mp3Scratch)->grbuf && ((mp3dec_scratch_t *)mp3Scratch)->syn &&
-            mIn && mPcm && mOut[0] && mOut[1] && mOut[2];
-  if (ok) { mp3dec_init(mDec); mInLen = 0; return true; }
+  for (auto &o : mOut) o = (int16_t *)vm::audioAlloc(MP3_FRAME * 2);
+  bool ok = mDec && mp3Scratch && grbuf && syn && mIn && mPcm && mOut[0] && mOut[1] && mOut[2];
+  int borrowed = 0;
+  for (const void *p : {(const void *)syn, (const void *)mDec, (const void *)grbuf, (const void *)mPcm, (const void *)mIn,
+                        (const void *)mp3Scratch, (const void *)mOut[0], (const void *)mOut[1], (const void *)mOut[2]})
+    if (p && vm::inArena(p)) borrowed++;
+  if (ok) {
+    mp3dec_init(mDec);
+    mInLen = 0;
+    if (borrowed) usbdev::log(String("mp3: ") + borrowed + " of 9 buffers from the Lua arena (heap largest " +
+                              heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + ")");
+    return true;
+  }
   usbdev::log(String("mp3: not enough memory, heap free=") + heap_caps_get_free_size(MALLOC_CAP_8BIT) + " largest=" +
-              heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+              heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) + " arena free=" + vm::arenaFree());
   mp3Free();
   return false;
 }
@@ -1000,16 +1018,24 @@ static const luaL_Reg gpsLib[] = {{"start", gp_start}, {"stop", gp_stop}, {"read
 static const luaL_Reg dispLib[] = {{"image", di_image}, {"fill", di_fill}, {"text", di_text}, {nullptr, nullptr}};
 extern const luaL_Reg musiclibFns[];  // musiclib.cpp
 extern const luaL_Reg appstoreFns[];  // appstore.cpp
+extern const luaL_Reg backupFns[];    // backup.cpp
 static const struct { const char *name; const luaL_Reg *fns; } HW_LIBS[] = {
     {"audio", audioLib}, {"ir", irLib}, {"i2c", i2cLib}, {"http", httpLib},
     {"lora", loraLib}, {"gps", gpsLib}, {"disp", dispLib}, {"musiclib", musiclibFns},
-    {"appstore", appstoreFns}};
+    {"appstore", appstoreFns}, {"backup", backupFns}};
 
-// sys.hwlib(name) -> the table for that driver, or nil
+// sys.hwlib(name) -> the table for that driver or library, or nil (runtime.lua
+// calls it the first time an app uses one of these globals)
 static int hw_lib(lua_State *L) {
   const char *name = luaL_checkstring(L, 1);
   for (auto &l : HW_LIBS)
     if (!strcmp(l.name, name)) { luaL_newlib(L, l.fns); return 1; }
+  if (openApiLib(L, name)) return 1;
+  // standard libraries most apps don't need at once (vm.cpp opens base and string)
+  static const struct { const char *name; lua_CFunction open; } STD[] = {
+      {"math", luaopen_math}, {"table", luaopen_table}, {"utf8", luaopen_utf8}, {"coroutine", luaopen_coroutine}};
+  for (auto &l : STD)
+    if (!strcmp(l.name, name)) { luaL_requiref(L, l.name, l.open, 0); return 1; }
   lua_pushnil(L);
   return 1;
 }

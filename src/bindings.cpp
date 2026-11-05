@@ -697,23 +697,110 @@ static void add(lua_State *L, const char *name, const luaL_Reg *fns) {
   lua_setglobal(L, name);
 }
 
-void registerApi(lua_State *L) {
-
+// Tables most apps never touch are made on first use (runtime.lua asks for
+// them through sys.hwlib), so they cost an app nothing until then.
+bool openApiLib(lua_State *L, const char *name) {
   static const luaL_Reg gfxLib[] = {
       {"rgb", g_rgb}, {"clear", g_clear}, {"px", g_px}, {"line", g_line}, {"rect", g_rect}, {"fill", g_fill},
       {"rrect", g_rrect}, {"rfill", g_rfill}, {"circle", g_circle}, {"disc", g_disc}, {"tri", g_tri},
       {"arc", g_arc}, {"text", g_text}, {"text_w", g_text_w}, {"clip", g_clip}, {"noclip", g_noclip},
       {"brightness", g_brightness}, {nullptr, nullptr}};
-  luaL_newlib(L, gfxLib);
-  lua_pushinteger(L, SCREEN_W); lua_setfield(L, -2, "w");
-  lua_pushinteger(L, SCREEN_H); lua_setfield(L, -2, "h");
-  lua_setglobal(L, "gfx");
-
   static const luaL_Reg sndLib[] = {{"tone", s_tone}, {"stop", s_stop}, {"volume", s_volume}, {nullptr, nullptr}};
-  add(L, "snd", sndLib);
   static const luaL_Reg imuLib[] = {{"read", i_read}, {nullptr, nullptr}};
-  add(L, "imu", imuLib);
+  static const luaL_Reg wifiLib[] = {
+      {"enable", w_enable}, {"connect", w_connect}, {"disconnect", w_disconnect}, {"status", w_status},
+      {"scan_start", w_scan_start}, {"scan_result", w_scan_result}, {"rssi", w_rssi}, {"ip", w_ip},
+      {"ssid", w_ssid}, {nullptr, nullptr}};
+  static const luaL_Reg usbLib[] = {
+      {"status", u_status}, {"type", u_type}, {"key", u_key}, {"write", u_write},
+      {"read", u_read}, {"log_dump", u_log_dump}, {"share", u_share},
+      {"mouse_move", u_mouse_move}, {"mouse_click", u_mouse_click}, {"mouse_press", u_mouse_press}, {"sharing", u_sharing}, {nullptr, nullptr}};
+  static const luaL_Reg netLib[] = {
+      {"start", n_start}, {"stop", n_stop}, {"running", n_running}, {"mac", n_mac},
+      {"add_peer", n_add_peer}, {"send", n_send}, {"broadcast", n_broadcast}, {"recv", n_recv},
+      {nullptr, nullptr}};
+  static const luaL_Reg clockLib[] = {{"now", k_now}, {"sync", k_sync}, {"set_tz", k_set_tz}, {nullptr, nullptr}};
+  static const struct { const char *name; const luaL_Reg *fns; } LIBS[] = {
+      {"gfx", gfxLib}, {"snd", sndLib}, {"imu", imuLib}, {"wifi", wifiLib},
+      {"usb", usbLib}, {"net", netLib}, {"clock", clockLib}};
+  for (auto &l : LIBS) {
+    if (strcmp(l.name, name)) continue;
+    luaL_newlib(L, l.fns);
+    if (!strcmp(name, "gfx")) {
+      lua_pushinteger(L, SCREEN_W); lua_setfield(L, -2, "w");
+      lua_pushinteger(L, SCREEN_H); lua_setfield(L, -2, "h");
+    }
+    return true;
+  }
+  return false;
+}
 
+// app.save() tables are kept as text while the app is closed: __ser makes
+// that text, __deser reads it back (as data only: no globals). Native, so the
+// code costs an app's Lua memory nothing.
+static void serValue(lua_State *L, int idx, String &out, int depth) {
+  idx = lua_absindex(L, idx);
+  switch (lua_type(L, idx)) {
+    case LUA_TBOOLEAN: out += lua_toboolean(L, idx) ? "true" : "false"; break;
+    case LUA_TNUMBER: {
+      lua_Number v = lua_tonumber(L, idx);
+      if (!lua_isinteger(L, idx) && !isfinite(v)) { out += "0"; break; }  // inf/nan would not load back
+      size_t n;
+      const char *s = luaL_tolstring(L, idx, &n);  // Lua's own format (3.0 stays a float)
+      out.concat(s, n);
+      lua_pop(L, 1);
+      break;
+    }
+    case LUA_TSTRING: {
+      size_t n;
+      const char *s = lua_tolstring(L, idx, &n);
+      out += '"';
+      for (size_t i = 0; i < n; i++) {
+        unsigned char c = s[i];
+        if (c == '"' || c == '\\') { out += '\\'; out += (char)c; }
+        else if (c < 32 || c == 127) { char e[6]; snprintf(e, sizeof e, "\\%03u", c); out += e; }
+        else out += (char)c;
+      }
+      out += '"';
+      break;
+    }
+    case LUA_TTABLE:
+      if (depth >= 6) { out += "nil"; break; }
+      luaL_checkstack(L, 4, "saved state too deep");
+      out += '{';
+      lua_pushnil(L);
+      while (lua_next(L, idx)) {
+        out += '[';
+        serValue(L, -2, out, depth + 1);
+        out += "]=";
+        serValue(L, -1, out, depth + 1);
+        out += ',';
+        lua_pop(L, 1);
+      }
+      out += '}';
+      break;
+    default: out += "nil";
+  }
+}
+static int y_ser(lua_State *L) {
+  String out;
+  serValue(L, 1, out, 0);
+  lua_pushlstring(L, out.c_str(), out.length());
+  return 1;
+}
+static int y_deser(lua_State *L) {
+  size_t n;
+  const char *s = luaL_checklstring(L, 1, &n);
+  String code = "return ";
+  code.concat(s, n);
+  if (luaL_loadbufferx(L, code.c_str(), code.length(), "=saved", "t") != LUA_OK) return 0;
+  lua_newtable(L);  // its _ENV: no globals
+  lua_setupvalue(L, -2, 1);
+  if (lua_pcall(L, 0, 1, 0) != LUA_OK) return 0;
+  return 1;
+}
+
+void registerApi(lua_State *L) {
   static const luaL_Reg sysLib[] = {
       {"millis", y_millis}, {"delay", y_delay}, {"heap", y_heap}, {"battery", y_battery},
       {"reboot", y_reboot}, {"display_sleep", y_display_sleep}, {"display_hold", y_display_hold},
@@ -729,25 +816,6 @@ void registerApi(lua_State *L) {
 
   static const luaL_Reg cfgLib[] = {{"get", c_get}, {"set", c_set}, {nullptr, nullptr}};
   add(L, "cfg", cfgLib);
-
-  static const luaL_Reg wifiLib[] = {
-      {"enable", w_enable}, {"connect", w_connect}, {"disconnect", w_disconnect}, {"status", w_status},
-      {"scan_start", w_scan_start}, {"scan_result", w_scan_result}, {"rssi", w_rssi}, {"ip", w_ip},
-      {"ssid", w_ssid}, {nullptr, nullptr}};
-  add(L, "wifi", wifiLib);
-
-  static const luaL_Reg usbLib[] = {
-      {"status", u_status}, {"type", u_type}, {"key", u_key}, {"write", u_write},
-      {"read", u_read}, {"log_dump", u_log_dump}, {"share", u_share},
-      {"mouse_move", u_mouse_move}, {"mouse_click", u_mouse_click}, {"mouse_press", u_mouse_press}, {"sharing", u_sharing}, {nullptr, nullptr}};
-  add(L, "usb", usbLib);
-
-  static const luaL_Reg netLib[] = {
-      {"start", n_start}, {"stop", n_stop}, {"running", n_running}, {"mac", n_mac},
-      {"add_peer", n_add_peer}, {"send", n_send}, {"broadcast", n_broadcast}, {"recv", n_recv},
-      {nullptr, nullptr}};
-  add(L, "net", netLib);
-
-  static const luaL_Reg clockLib[] = {{"now", k_now}, {"sync", k_sync}, {"set_tz", k_set_tz}, {nullptr, nullptr}};
-  add(L, "clock", clockLib);
+  lua_register(L, "__ser", y_ser);
+  lua_register(L, "__deser", y_deser);
 }

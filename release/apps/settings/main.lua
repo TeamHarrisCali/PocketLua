@@ -68,6 +68,7 @@ local function main_page()
       item("Sound", "sound", "S", A.pink),
       item("Devices", "devices", "N", A.red),
       item("USB", "usb", "U", A.green),
+      item("Backup", "backup", "B", A.teal),
       item("About", "about", "i", A.purple),
     }
   end

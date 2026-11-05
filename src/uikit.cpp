@@ -461,6 +461,37 @@ static int l_empty(lua_State *L) { empty(luaL_optstring(L, 1, "warn"), luaL_opts
 static int l_set_theme(lua_State *L) { setTheme(luaL_checkstring(L, 1)); pushColors(L); return 0; }
 static int l_set_accent(lua_State *L) { setAccent(luaL_checkstring(L, 1)); pushColors(L); return 0; }
 
+// ui.accent_names / ui.theme_names / ui.themes, made on first read.
+static int l_lazy(lua_State *L) {
+  const char *k = lua_tostring(L, 2);
+  if (!k) return 0;
+  if (!strcmp(k, "accent_names")) {
+    lua_createtable(L, ACCENT_COUNT, 0);
+    for (int i = 0; i < ACCENT_COUNT; i++) { lua_pushstring(L, ACCENTS[i]); lua_rawseti(L, -2, i + 1); }
+  } else if (!strcmp(k, "theme_names")) {
+    lua_createtable(L, THEME_COUNT, 0);
+    for (int i = 0; i < THEME_COUNT; i++) { lua_pushstring(L, THEMES[i]); lua_rawseti(L, -2, i + 1); }
+  } else if (!strcmp(k, "themes")) {
+    // raw theme colours, for apps that blend their own (2048)
+    static const char *keys[] = {"bg", "surface", "surface2", "line", "text", "muted"};
+    lua_createtable(L, 0, THEME_COUNT);
+    for (auto &t : THEME_DEFS) {
+      lua_createtable(L, 0, 6);
+      for (int i = 0; i < 6; i++) {
+        lua_createtable(L, 3, 0);
+        for (int c = 0; c < 3; c++) { lua_pushinteger(L, t.c[i][c]); lua_rawseti(L, -2, c + 1); }
+        lua_setfield(L, -2, keys[i]);
+      }
+      lua_setfield(L, -2, t.name);
+    }
+  } else {
+    return 0;
+  }
+  lua_pushvalue(L, -1);
+  lua_setfield(L, 1, k);  // kept in ui from now on
+  return 1;
+}
+
 void registerLua(lua_State *L) {
   static const luaL_Reg fns[] = {
       {"text", l_text}, {"center", l_center}, {"right", l_right}, {"big", l_big}, {"title", l_title},
@@ -475,25 +506,12 @@ void registerLua(lua_State *L) {
   lua_createtable(L, 0, ACCENT_COUNT);
   for (auto &a : ACCENT_DEFS) { lua_pushinteger(L, rgb(a.r, a.g, a.b)); lua_setfield(L, -2, a.name); }
   lua_setfield(L, -2, "accents");
-  lua_createtable(L, ACCENT_COUNT, 0);
-  for (int i = 0; i < ACCENT_COUNT; i++) { lua_pushstring(L, ACCENTS[i]); lua_rawseti(L, -2, i + 1); }
-  lua_setfield(L, -2, "accent_names");
-  lua_createtable(L, THEME_COUNT, 0);
-  for (int i = 0; i < THEME_COUNT; i++) { lua_pushstring(L, THEMES[i]); lua_rawseti(L, -2, i + 1); }
-  lua_setfield(L, -2, "theme_names");
-  // raw theme colours, for apps that blend their own (2048)
-  static const char *keys[] = {"bg", "surface", "surface2", "line", "text", "muted"};
-  lua_createtable(L, 0, THEME_COUNT);
-  for (auto &t : THEME_DEFS) {
-    lua_createtable(L, 0, 6);
-    for (int i = 0; i < 6; i++) {
-      lua_createtable(L, 3, 0);
-      for (int k = 0; k < 3; k++) { lua_pushinteger(L, t.c[i][k]); lua_rawseti(L, -2, k + 1); }
-      lua_setfield(L, -2, keys[i]);
-    }
-    lua_setfield(L, -2, t.name);
-  }
-  lua_setfield(L, -2, "themes");
+  // accent_names, theme_names and themes (30 small tables) are built when an
+  // app first reads them: only Settings and 2048 do
+  lua_createtable(L, 0, 1);
+  lua_pushcfunction(L, l_lazy);
+  lua_setfield(L, -2, "__index");
+  lua_setmetatable(L, -2);
   lua_newtable(L);
   lua_setfield(L, -2, "col");
   lua_setglobal(L, "ui");
