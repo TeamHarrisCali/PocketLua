@@ -47,6 +47,11 @@ static uint32_t spkLastUse = 0;
 static const size_t ABUF = 1024;  // samples per buffer
 static void eqProcess(int16_t *s, int n, int ch, uint32_t rate);  // the equalizer, below
 
+// How much of its 6 KB stack an audio task never touched (logged as it ends).
+static void logAudioStack(const char *what) {
+  usbdev::log(String("audio: ") + what + " task left " + uxTaskGetStackHighWaterMark(nullptr) + " of 6144 stack bytes unused");
+}
+
 // The ADV's mic goes through an ES8311 codec that shares its I2S pins with the
 // speaker. M5Unified's Mic reads a constant value once the speaker has used the
 // pins (IDF 5.5, espressif/esp-idf#18621), so the mic is driven here instead:
@@ -204,6 +209,9 @@ void hwAudioBegin() {
   // straight-line interpolation, which dulls the highs and adds distortion
   auto c = M5Cardputer.Speaker.config();
   c.sample_rate = 44100;
+  // 6 DMA buffers of 256 frames (35 ms) instead of 8: 2 KB less while playing;
+  // the decoder keeps three ~26 ms frames queued ahead of them anyway
+  c.dma_buf_count = 6;
   M5Cardputer.Speaker.config(c);
   M5Cardputer.Speaker.setVolume(UNITY_MASTER);
 }
@@ -290,6 +298,7 @@ static void recTask(void *) {
   micClose();
   store::pin(false);
   aMode = A_IDLE;
+  logAudioStack("record");
   aTask = nullptr;
   vTaskDelete(nullptr);
 }
@@ -305,7 +314,9 @@ static void speakerDrain() {
 // Starts an audio task, or logs why it couldn't (its stack is 8 KB in one
 // block, which a fragmented heap may not have).
 static bool startAudioTask(TaskFunction_t fn, const char *name) {
-  if (xTaskCreatePinnedToCore(fn, name, 8192, nullptr, 3, &aTask, 0) == pdPASS) return true;
+  // 6 KB: the decoder works in its heap buffers; its largest local array is
+  // 768 bytes (the log shows what each run used, see logAudioStack)
+  if (xTaskCreatePinnedToCore(fn, name, 6144, nullptr, 3, &aTask, 0) == pdPASS) return true;
   aTask = nullptr;
   usbdev::log(String("audio: no memory for the ") + name + " task, heap free=" + heap_caps_get_free_size(MALLOC_CAP_8BIT) +
               " largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
@@ -354,6 +365,7 @@ static void playTask(void *) {
   free(buf[1]);
   store::pin(false);
   aMode = A_IDLE;
+  logAudioStack("WAV");
   aTask = nullptr;
   vTaskDelete(nullptr);
 }
@@ -363,7 +375,10 @@ static void playTask(void *) {
 // over 8.4 KB: with Wi-Fi off the heap has room, but in pieces (one 16 KB
 // block was often not to be had), so the decoder's scratch arrays and the
 // three output frames are separate blocks.
-static const size_t MP3_IN = 4096, MP3_FRAME = 1152;
+// MP3_IN holds the frame being decoded and the start of the next; it is
+// topped up whenever less than MP3_REFILL is left, which is more than the
+// largest frame (1441 bytes), so a frame is never cut in two.
+static const size_t MP3_IN = 2560, MP3_REFILL = 1536, MP3_FRAME = 1152;
 static const size_t GRBUF = 2 * 576 * sizeof(float), SYN = (18 + 15) * 2 * 32 * sizeof(float);
 static mp3dec_t *mDec = nullptr;
 static uint8_t *mIn = nullptr;
@@ -518,7 +533,7 @@ static int au_eq_presets(lua_State *L) {
 // Decodes the next frame into out as mono; returns the sample count, 0 at the end.
 static int mp3Next(int16_t *out, mp3dec_frame_info_t &info) {
   while (true) {
-    if (mInLen < (int)MP3_IN / 2) {
+    if (mInLen < (int)MP3_REFILL) {
       int n = aFile.read(mIn + mInLen, MP3_IN - mInLen);
       if (n > 0) mInLen += n;
     }
@@ -593,6 +608,7 @@ static void mp3Task(void *) {
   mp3Free();
   store::pin(false);
   aMode = A_IDLE;
+  logAudioStack("MP3");
   aTask = nullptr;
   vTaskDelete(nullptr);
 }
