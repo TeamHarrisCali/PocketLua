@@ -1,5 +1,5 @@
 pocketlua-catalog 1
-firmware	74b39e7d	2820240	dce7ef2b826656b9226ce8e4f70bbbbe941dac2ed47ae069fe294cd3ed815dcf	1793836990
+firmware	a400ca3e	2820240	947397247f98921ec08abf3ab77be8507737b62abbcb68c4fc8e6ade147f54ec	1793837370
 app	adventure	app	11833	66a3b372e6511318adb639e68bc5e3fd74629fac861f6e52eb038881081ec043	10522	43a269386a3ad5d4017c89cdf470f9126a17b00a76d7e766d6c66fada20f58f0	Adventure	games	book	-	a small text game. Type commands (help lists them) and press Enter; Fn+; and Fn+. scroll. Progress is saved to data/adventure.sav.
 app	airmouse	app	5819	a79aea1c965065168da9d76dc908e3dd1c2dc39ae98f0ee63ddf14f3b6eb68a7	5166	1e990161503d00dfa793a26064d6143e8686f8c807f3f62d67cf83c22e4fafbd	Air Mouse	net	mouse	-	turn the Cardputer to move the computer's pointer (USB mouse). Hold it flat like a remote, IR window forward: turning left/right moves the p
 app	beatbox	app	5413	16f121ee3fb6c13c03bace441fbbf6ba64fb26bce4b11308a78c4eff853fc3b7	4932	488141b382171872146b599d233de33ead0dff4c5aa2bdc2494de62e9c1459be	Beat Box	media	drum	-	a 16-step drum machine. Arrows move, Space toggles a step, P plays. The speaker plays one tone at a time, so on a busy step the highest-prio
