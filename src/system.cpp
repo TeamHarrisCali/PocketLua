@@ -11,6 +11,7 @@
 #include <vector>
 #include "bindings.h"
 #include "embedded.h"
+#include "hw.h"
 #include "storage.h"
 #include "uikit.h"
 #include "usbdev.h"
@@ -31,6 +32,7 @@ void appstoreBoot();  // at boot: drop card copies that hide built-in system fil
 void hwReleaseAudio();  // hw.cpp: speaker and mic off when idle
 void hwReleaseDrivers();  // hw.cpp: LoRa and GPS off
 bool hwAudioBusy();       // hw.cpp: recording or playing
+String hwProbe();         // hw.cpp: pin levels, for the USB console's !pins
 
 String tlsBench();  // tlsbench.cpp: crypto speed test (USB console !bench)
 
@@ -83,7 +85,7 @@ static bool tuneQuiet = false;  // the boot chime plays at a quarter of the volu
 
 static void tuneVolume(bool quiet) {
   int v = cget("vol", "100").toInt();
-  M5Cardputer.Speaker.setVolume(quiet ? max(v / 4, 12) : v);
+  hwSetVolume(quiet ? max(v / 4, 12) : v);
   tuneQuiet = quiet;
 }
 
@@ -586,7 +588,7 @@ static void applySettings() {
   ui::setTheme(cget("theme", "slate").c_str());
   ui::setAccent(cget("accent", "blue").c_str());
   M5Cardputer.Display.setBrightness(cget("bright", "160").toInt());
-  M5Cardputer.Speaker.setVolume(cget("vol", "100").toInt());
+  hwSetVolume(cget("vol", "100").toInt());
   setenv("TZ", tz().c_str(), 1);
   tzset();
   sleepAfter = cget("sleep", "60").toInt();
@@ -884,13 +886,11 @@ static String sleepLabel(int s) {
   return String(s / 60) + " min";
 }
 
-// Fn+- / Fn+=: volume from anywhere, in 8 steps.
+// Fn+- / Fn+=: volume from anywhere, one of 20 even steps.
 static void volumeKey(int d) {
-  int v = constrain(cget("vol", "100").toInt() + d * 32, 0, 255);
-  if (d > 0 && v > 224) v = 255;  // the last step reaches full volume
-  cfgSet("vol", String(v));
-  M5Cardputer.Speaker.setVolume(v);
-  toast(v ? String("Volume ") + (v * 100 + 127) / 255 + "%" : String("Volume off"), 1.2);
+  int l = volumeStep(d);
+  bool capped = d > 0 && headphones() && l == headphoneMax();
+  toast(!l ? String("Volume off") : String("Volume ") + l * 5 + "%" + (capped ? " (headphone max)" : ""), 1.2);
   if (!hwAudioBusy()) playTone(880, 50);  // something to hear, unless audio is already playing
 }
 
@@ -900,11 +900,12 @@ static void quickAdjust(int i, int d) {
     cfgSet("bright", String(v));
     M5Cardputer.Display.setBrightness(v);
   } else if (i == 1) {
-    int v = constrain(cget("vol", "100").toInt() + d * 32, 0, 255);
-    cfgSet("vol", String(v));
-    M5Cardputer.Speaker.setVolume(v);
+    volumeStep(d);
     playTone(880, 60);
   } else if (i == 2) {
+    setHeadphones(!headphones());
+    toast(headphones() ? String("Headphones: volume up to ") + headphoneMax() * 5 + "%" : String("Speaker volume"), 2);
+  } else if (i == 3) {
     if (WiFi.getMode() == WIFI_OFF) {
       cfgSet("wifi_auto", "1");
       wifiStartSvc(cget("wifi_ssid"), cget("wifi_pass"), false);
@@ -912,13 +913,13 @@ static void quickAdjust(int i, int d) {
       cfgSet("wifi_auto", "0");
       wifiEnable(false);
     }
-  } else if (i == 3) {
+  } else if (i == 4) {
     int idx = 0;
     for (int t = 0; t < ui::THEME_COUNT; t++) if (ui::themeName == ui::THEMES[t]) idx = t;
     idx = (idx + d + ui::THEME_COUNT) % ui::THEME_COUNT;
     cfgSet("theme", ui::THEMES[idx]);
     ui::setTheme(ui::THEMES[idx]);
-  } else if (i == 4) {
+  } else if (i == 5) {
     int idx = 2;
     for (int t = 0; t < 6; t++) if (SLEEP_OPTS[t] == sleepAfter) idx = t;
     idx = (idx + d + 6) % 6;
@@ -935,25 +936,25 @@ static void quickKey(const Key &k) {
   bool left = key == "left" || (k.text && k.text[0] == ','), right = key == "right" || (k.text && k.text[0] == '/');
   if (up) quickSel = (quickSel + 7) % 8;
   else if (down) quickSel = (quickSel + 1) % 8;
-  else if ((left || right) && quickSel <= 4) quickAdjust(quickSel, left ? -1 : 1);
+  else if ((left || right) && quickSel <= 5) quickAdjust(quickSel, left ? -1 : 1);
   else if (key == "enter") {
-    if (quickSel <= 4) quickAdjust(quickSel, 1);
-    else if (quickSel == 5) { overlay = OV_NOTES; ui::status.unread = 0; notesSel = notesTop = 1; }
-    else if (quickSel == 6) { overlay = OV_NONE; screenshot(); }
+    if (quickSel <= 5) quickAdjust(quickSel, 1);
+    else if (quickSel == 6) { overlay = OV_NOTES; ui::status.unread = 0; notesSel = notesTop = 1; }
     else if (quickSel == 7) { overlay = OV_NONE; launch("tasks"); }
   } else if (key == "esc") overlay = OV_NONE;
 }
 
 static void drawQuick() {
-  const char *labels[] = {"Brightness", "Volume", "Wi-Fi", "Theme", "Sleep after", "Notifications", "Screenshot", "Task Manager"};
+  // (screenshots: Fn+P from anywhere)
+  const char *labels[] = {"Brightness", "Volume", "Headphones", "Wi-Fi", "Theme", "Sleep after", "Notifications", "Task Manager"};
   String vals[8];
   vals[0] = String(cget("bright", "160").toInt() * 100 / 255) + "%";
-  vals[1] = String(cget("vol", "100").toInt() * 100 / 255) + "%";
-  vals[2] = WiFi.getMode() == WIFI_OFF ? "Off" : (WiFi.status() == WL_CONNECTED ? "Connected" : "On");
-  vals[3] = ui::themeName;
-  vals[4] = sleepLabel(sleepAfter);
-  vals[5] = String(ui::status.unread) + " new";
-  vals[6] = "Fn+P";
+  vals[1] = String(volumeLevel(cget("vol", "100").toInt()) * 5) + "%";
+  vals[2] = headphones() ? "On" : "Off";
+  vals[3] = WiFi.getMode() == WIFI_OFF ? "Off" : (WiFi.status() == WL_CONNECTED ? "Connected" : "On");
+  vals[4] = ui::themeName;
+  vals[5] = sleepLabel(sleepAfter);
+  vals[6] = String(ui::status.unread) + " new";
   int x = 30, y = 18, w = 180, rh = 13;
   ui::box(x, y, w, 12 + 8 * rh);
   for (int i = 0; i < 8; i++) {
@@ -1109,6 +1110,7 @@ static bool conOn = false;
 static const char *B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 static void reply(const String &s) { usbdev::serialWrite(s + "\n"); }
+static void replyData(const String &s) { usbdev::serialWrite(s + "\n", 3000); }  // file contents: don't cut
 
 // Appends received bytes as text. Control bytes are dropped: String::indexOf
 // stops at a NUL, so one stray NUL would hide every later newline and the
@@ -1221,6 +1223,7 @@ static void conPut(const String &arg) {
   }
   fs->remove(real);
   fs->rename(real + ".part", real);
+  store::rescan();  // the list of card files (and their sizes) changed
   reply("ok " + path + " " + String(got) + " " + String(crc, HEX));
   usbdev::log("received " + path + " (" + String(got) + " bytes)");
   notify("Received " + path, String(got / 1024) + " KB");
@@ -1247,7 +1250,7 @@ static void conLine(String line) {
         uint8_t piece[768];
         int n;
         while ((n = f.read(piece, sizeof piece)) > 0) {
-          reply("!data " + b64encode((const char *)piece, n));
+          replyData("!data " + b64encode((const char *)piece, n));
           feedWatch();
         }
         f.close();
@@ -1258,9 +1261,10 @@ static void conLine(String line) {
       const char *p;
       size_t n;
       if (!store::view(arg, buf, p, n)) { reply("error: not found"); return; }
-      for (size_t i = 0; i < n; i += 768) reply("!data " + b64encode(p + i, min((size_t)768, n - i)));
+      for (size_t i = 0; i < n; i += 768) replyData("!data " + b64encode(p + i, min((size_t)768, n - i)));
       reply("!end");
     } else if (cmd == "fput") conPut(arg);
+    else if (cmd == "pins") reply(hwProbe());
     else if (cmd == "bench") { reply("benchmarking crypto (a few seconds)..."); reply(tlsBench()); }
     else if (cmd == "run") { launch(arg); reply("ok"); }
     else if (cmd == "ls") { for (auto &e : store::list(arg)) reply(String(e.dir ? "d " : "- ") + e.name); }
@@ -1397,6 +1401,10 @@ static void services() {
 // ================================================================ entry points
 void begin(bool safeMode) {
   safe = safeMode;
+  // lists that grow while apps run get their room now, while the heap is in
+  // one piece (a failed vector growth aborts)
+  notes.reserve(21);
+  savedStates.reserve(11);
   applySettings();
   if (!safe) appstoreBoot();
   scanApps();

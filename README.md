@@ -49,7 +49,7 @@ Store-only apps (not built into the firmware) go in `store/apps/`.
 | Fn + `;` `.` `,` `/` | Up, down, left, right. The bare keys also move in menus |
 | Fn + `` ` `` | Esc: back (to the app that opened this one, or home) |
 | G0 button | Home from anywhere |
-| Fn+Q | Quick settings: brightness, volume, Wi-Fi, theme, sleep |
+| Fn+Q | Quick settings: brightness, volume, headphones, Wi-Fi, theme, sleep |
 | Fn+N | Notification center |
 | Fn+P | Screenshot, saved as a BMP in `data/screenshots` |
 | Fn+L | Lock screen |
@@ -80,6 +80,8 @@ LoRa Chat and GPS need the Cap LoRa-1262. Air Mouse and USB Keys need Settings >
 - **Background timers and daily alarms** keep running whichever app is open.
 - **Resume:** apps remember where you were. Files open in the app that handles their type (`.txt`, `.lua` editor; `.wav` Music; `.bmp`, `.jpg`, `.png` Images).
 - **System sounds** (Settings > Sound), a 12-hour clock option, and screenshots.
+- **Volume** moves in 20 even steps (2.5 dB). **Headphone mode** (Quick settings or Settings > Sound) keeps its own volume and stops at a maximum you set; the board can't sense the jack, so it is switched by hand.
+- **Music**: equalizer presets (E on Now Playing), Tab between Now Playing and the lists, A / T for the song's album / artist.
 - **Backup and restore** (Settings > Backup): settings, notes, app data and the scripts you made or edited go into one file in `/pocketlua/backups/` (the 5 newest are kept). Music, recordings, screenshots and App Store apps are left out. Restoring writes them back and restarts.
 
 ## Memory

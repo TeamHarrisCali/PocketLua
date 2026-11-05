@@ -10,6 +10,12 @@ void registerHw(lua_State *L);
 // finishes background audio work.
 void hwTick();
 
+// Installs the speaker's pop-free on/off step (main.cpp, after M5Cardputer.begin).
+void hwAudioBegin();
+
+// The volume setting (0-255 "vol") applied: in the codec on the ADV.
+void hwSetVolume(int raw);
+
 // Long blocking calls (HTTP, LoRa send, ...) reset the script time budget so
 // they are not mistaken for a hung script. Provided by main.cpp.
 void luaBudgetReset();

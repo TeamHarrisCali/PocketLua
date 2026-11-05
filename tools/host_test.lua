@@ -144,10 +144,39 @@ disp = { image = rec("image", true), fill = rec("dfill"), text = rec("dtext") }
 audio.pause = function(on) return on end
 audio.seek = rec("seek")
 audio.tags = function() return {} end
+-- volume in 20 levels 2.5 dB apart, as bindings.cpp does it
+local function vol_level(raw)
+  if raw <= 0 then return 0 end
+  return math.max(1, math.min(20, math.floor(20 + 40 * math.log(raw / 255, 10) / 2.5 + 0.5)))
+end
+snd.step = function(d)
+  local l = math.max(0, math.min(20, vol_level(tonumber(cfg.get("vol")) or 100) + d))
+  local raw = l == 0 and 0 or math.floor(255 * 10 ^ ((l - 20) * 2.5 / 40) + 0.5)
+  cfg.set("vol", raw)
+  snd.volume(raw)
+  return l, l * 5
+end
+snd.level = function() local l = vol_level(tonumber(cfg.get("vol")) or 100); return l, l * 5, 20 end
+snd.headphones = function(on)
+  if on ~= nil then cfg.set("hp", on and "1" or "0") end
+  return cfg.get("hp") == "1", tonumber(cfg.get("hp_max") or 50)
+end
+snd.headphone_max = function(p)
+  if p then cfg.set("hp_max", math.max(5, math.min(100, p))) end
+  return tonumber(cfg.get("hp_max") or 50)
+end
+local EQ = { { id = "flat", name = "Flat" }, { id = "warm", name = "Warm" }, { id = "soft", name = "Less treble" } }
+audio.eq_presets = function() return EQ end
+audio.eq = function(id)
+  if id then audio.eq_now = id end
+  local cur = audio.eq_now or "flat"
+  for _, p in ipairs(EQ) do if p.id == cur then return p.id, p.name end end
+  return "flat", "Flat"
+end
 appstore = { list = function() return nil end, run = rec("store_run"), result = function() return "" end,
   channel = function() return "beta" end }
 musiclib = { info = function() return nil end, rows = function() return {} end, item = function() end,
-  albums_in = function() return {} end, scan = function() return true end,
+  albums_in = function() return {} end, scan = function() return true end, find = function() return nil end,
   scan_status = function() return "done", 0, "" end }
 
 -- the device creates these on first use (sys.hwlib); keep copies for that

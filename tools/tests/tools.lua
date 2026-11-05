@@ -295,6 +295,20 @@ check(shows("$123456") and shows("0%"), "tip: resumes where it was")
 key("esc"); key("esc")
 check(shell.app() ~= "tip", "tip: Esc with no bill leaves the app")
 
+-- ================================================================ Settings > Sound
+launch("settings")
+for _ = 1, 3 do key("down") end
+key("enter")
+check(shows("Volume") and shows("Headphones") and shows("Headphone max") and shows("50%"), "sound: headphone rows")
+key("down"); key("enter")
+check(cfg.get("hp") == "1" and shows("Headphones: up to 50%"), "sound: Enter turns headphone mode on")
+key("down"); key("right")
+check(shows("55%") and tonumber(cfg.get("hp_max")) == 55, "sound: <> sets the headphone maximum")
+key("left"); key("up"); key("enter")
+check(cfg.get("hp") == "0" and shows("Speaker volume"), "sound: and off again")
+no_error("settings")
+shell.home(); frames(2)
+
 -- ================================================================ Settings > Backup
 -- a fake backup module (the real one is native: src/backup.cpp)
 local BK = { list = {}, made = 0, restored = nil, removed = nil }

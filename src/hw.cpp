@@ -45,6 +45,7 @@ static size_t aDataStart = 0;             // where the audio starts in aFile (af
 static bool aStereo = false;
 static uint32_t spkLastUse = 0;
 static const size_t ABUF = 1024;  // samples per buffer
+static void eqProcess(int16_t *s, int n, int ch, uint32_t rate);  // the equalizer, below
 
 // The ADV's mic goes through an ES8311 codec that shares its I2S pins with the
 // speaker. M5Unified's Mic reads a constant value once the speaker has used the
@@ -61,6 +62,65 @@ static void micClose() {
   micRx = nullptr;
   micRate = 0;
   M5.In_I2C.writeRegister8(ES8311, 0x0D, 0xFC, 400000);  // power down the analog side
+}
+
+// No pops. The codec ramps its DAC volume itself (REG37) once that is on, so
+// the speaker path starts silent and fades in, and stopping, pausing and
+// seeking fade out first; cutting the sound mid-wave, or powering the
+// headphone driver up at full volume (what M5Unified does), pops loudly in
+// headphones. All on the main task: the I2C bus is shared with the keyboard.
+//
+// The volume is set here too, in the codec's DAC (0.5 dB steps, 0xBF = 0 dB):
+// M5Unified's own volume scales the samples before they are cut to 16 bits,
+// which at headphone levels (-30 dB) left ~11 bits of detail. Its master
+// volume stays at unity (UNITY_MASTER) instead.
+static const uint8_t UNITY_MASTER = 182;  // 16 x 182^2 x 255^2 x 2 / 2^36 ~= 1 for mono
+static uint8_t dacVol = 0;                // the DAC volume last written
+static uint8_t dacTarget = 0xBF;          // what the volume setting asks for
+static bool faded = true;                 // faded out (or not started): DAC at 0
+static uint32_t fadeInAt = 0;
+static void dacSet(uint8_t v) {
+  if (v == dacVol) return;
+  M5.In_I2C.writeRegister8(ES8311, 0x32, v, 400000);
+  dacVol = v;
+}
+static void fadeOut() {
+  if (faded || !M5Cardputer.Speaker.isRunning()) return;
+  faded = true;
+  dacSet(0);
+  delay(45);  // the codec's ramp (~35 ms)
+}
+static void fadeIn() {
+  if (!M5Cardputer.Speaker.isRunning()) return;
+  faded = false;
+  dacSet(dacTarget);
+}
+static bool codecVolume() { return M5.getBoard() == m5::board_t::board_M5CardputerADV; }
+
+// The "vol" setting (0-255, see volumeLevel in bindings.cpp) as the codec's
+// DAC volume: each of the 20 levels is as loud as it was with M5Unified's
+// volume (level 20 = +5.9 dB, as master 255 was), 2.5 dB apart.
+void hwSetVolume(int raw) {
+  if (!codecVolume()) { M5Cardputer.Speaker.setVolume(constrain(raw, 0, 255)); return; }
+  int level = volumeLevel(raw);
+  dacTarget = level ? (uint8_t)constrain(0xBF + (int)lroundf(2 * (5.9f + (level - 20) * 2.5f)), 1, 0xFF) : 0;
+  if (!faded && M5Cardputer.Speaker.isRunning()) dacSet(dacTarget);
+}
+
+static bool spkEnable(void *, bool on) {
+  if (on) {
+    static const uint8_t regs[][2] = {
+        {0x00, 0x80}, {0x01, 0xB5}, {0x02, 0x18}, {0x0D, 0x01},  // power on, clocks from BCLK, analog up
+        {0x37, 0x18},                                            // DAC volume ramps (and its EQ bypassed)
+        {0x32, 0x00},                                            // silent until fadeIn()
+        {0x12, 0x00}, {0x13, 0x10}};                             // DAC and headphone driver on
+    for (auto &r : regs) M5.In_I2C.writeRegister8(ES8311, r[0], r[1], 400000);
+    dacVol = 0;
+    faded = true;
+  } else {
+    fadeOut();  // the driver stays powered: switching it off clicks too
+  }
+  return true;
 }
 
 static int micSlot = -1;  // 0 = left, 1 = right, -1 = average both
@@ -96,10 +156,56 @@ static void micPickSlot() {
   usbdev::log(String("mic slots L=") + l + " R=" + r);
 }
 
-static void useSpeaker() {
+// Playback keeps the speaker driver until its app closes (hwReleaseAudio):
+// once Music has run a while the heap is in pieces and the driver's 8 KB of
+// DMA buffers could not be had again, so songs after a pause played silent.
+static bool spkHeld = false;
+
+static bool useSpeaker() {
   micClose();
-  if (!M5Cardputer.Speaker.isRunning()) M5Cardputer.Speaker.begin();
+  if (!M5Cardputer.Speaker.isRunning() && !M5Cardputer.Speaker.begin()) {
+    usbdev::log(String("speaker: could not start, heap free=") + heap_caps_get_free_size(MALLOC_CAP_8BIT) +
+                " largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    return false;
+  }
+  fadeIn();
   spkLastUse = millis();
+  return true;
+}
+
+// Replaces M5Unified's speaker on/off step (see spkEnable); main.cpp calls it
+// once after M5Cardputer.begin().
+// For finding a headphone-detect line (USB console "!pins"): the raw input
+// levels of every GPIO, the keyboard controller's (TCA8418, 0x34) GPIO status
+// and which chips answer on the internal I2C bus. Reads only.
+String hwProbe() {
+  char b[96];
+  snprintf(b, sizeof b, "gpio in0=%08lx in1=%08lx", (unsigned long)REG_READ(GPIO_IN_REG), (unsigned long)REG_READ(GPIO_IN1_REG));
+  String out = b;
+  out += " tca8418=";
+  for (uint8_t r : {0x14, 0x15, 0x16}) {
+    snprintf(b, sizeof b, "%02x ", M5.In_I2C.readRegister8(0x34, r, 400000));
+    out += b;
+  }
+  out += "i2c:";
+  for (uint8_t a = 0x08; a < 0x78; a++)
+    if (M5.In_I2C.scanID(a, 400000)) { snprintf(b, sizeof b, " %02x", a); out += b; }
+  return out;
+}
+
+// setCallback is protected in M5Unified; a derived class may take its address.
+struct SpkHook : m5::Speaker_Class {
+  static void install(m5::Speaker_Class &spk, bool (*fn)(void *, bool)) { (spk.*(&SpkHook::setCallback))(nullptr, fn); }
+};
+void hwAudioBegin() {
+  if (!codecVolume()) return;
+  SpkHook::install(M5Cardputer.Speaker, spkEnable);
+  // 44.1 kHz like nearly all music: M5Unified ran at 48 kHz and resampled by
+  // straight-line interpolation, which dulls the highs and adds distortion
+  auto c = M5Cardputer.Speaker.config();
+  c.sample_rate = 44100;
+  M5Cardputer.Speaker.config(c);
+  M5Cardputer.Speaker.setVolume(UNITY_MASTER);
 }
 
 static bool useMic(uint32_t rate) {
@@ -234,6 +340,7 @@ static void playTask(void *) {
       if (aStop || aPaused || aSeekTo >= 0) continue;
       int n = aFile.read((uint8_t *)buf[idx], ABUF * 2);
       if (n <= 0) break;
+      eqProcess(buf[idx], n / 2, aStereo ? 2 : 1, aRate);
       M5Cardputer.Speaker.playRaw(buf[idx], n / 2, aRate, aStereo, 1, 0);
       aSamples = aSamples + n / frame;
       spkLastUse = millis();
@@ -312,6 +419,102 @@ static bool mp3Alloc() {
   return false;
 }
 
+// ---------------------------------------------------------------- equalizer
+// Bass (low shelf 150 Hz), middle (peak 1.5 kHz) and treble (high shelf 5 kHz)
+// on what plays, in the audio task. The preset is chosen from Lua (eqWant);
+// the task recomputes its filters when that or the sample rate changes.
+// Boosts come with an equal cut in front, so they can't clip.
+struct EqPreset { const char *id, *name; int8_t bass, mid, treble; };
+static const EqPreset EQ_PRESETS[] = {
+    {"flat", "Flat", 0, 0, 0},     {"warm", "Warm", 2, 0, -6},   {"soft", "Less treble", 0, 0, -9},
+    {"bass", "Bass", 6, 0, -3},    {"vocal", "Vocal", -3, 3, -3}};
+static const int EQ_COUNT = sizeof EQ_PRESETS / sizeof EQ_PRESETS[0];
+static volatile int eqWant = -1;  // -1: read the setting at the next play
+static int eqHave = -2;
+static uint32_t eqRate = 0;
+struct Biquad { float b0, b1, b2, a1, a2, z1[2], z2[2]; bool on; };
+static Biquad eqBands[3];
+static float eqPre = 1;
+
+static int eqIndex(const String &id) {
+  for (int i = 0; i < EQ_COUNT; i++) if (id == EQ_PRESETS[i].id) return i;
+  return 0;
+}
+
+// RBJ audio EQ cookbook: type 0 low shelf, 1 peak, 2 high shelf.
+static void eqDesign(Biquad &q, int type, float f, float db, uint32_t rate) {
+  q.on = db != 0;
+  q.z1[0] = q.z1[1] = q.z2[0] = q.z2[1] = 0;
+  if (!q.on) return;
+  float A = powf(10, db / 40), w = 2 * (float)M_PI * f / rate, c = cosf(w), sn = sinf(w);
+  float b0, b1, b2, a0, a1, a2;
+  if (type == 1) {
+    float al = sn / (2 * 0.9f);
+    b0 = 1 + al * A; b1 = -2 * c; b2 = 1 - al * A; a0 = 1 + al / A; a1 = -2 * c; a2 = 1 - al / A;
+  } else {
+    float al = sn / 2 * sqrtf(2), r = 2 * sqrtf(A) * al;
+    if (type == 0) {
+      b0 = A * ((A + 1) - (A - 1) * c + r); b1 = 2 * A * ((A - 1) - (A + 1) * c); b2 = A * ((A + 1) - (A - 1) * c - r);
+      a0 = (A + 1) + (A - 1) * c + r; a1 = -2 * ((A - 1) + (A + 1) * c); a2 = (A + 1) + (A - 1) * c - r;
+    } else {
+      b0 = A * ((A + 1) + (A - 1) * c + r); b1 = -2 * A * ((A - 1) + (A + 1) * c); b2 = A * ((A + 1) + (A - 1) * c - r);
+      a0 = (A + 1) - (A - 1) * c + r; a1 = 2 * ((A - 1) - (A + 1) * c); a2 = (A + 1) - (A - 1) * c - r;
+    }
+  }
+  q.b0 = b0 / a0; q.b1 = b1 / a0; q.b2 = b2 / a0; q.a1 = a1 / a0; q.a2 = a2 / a0;
+}
+
+// Filters n samples in place (ch = 1 mono, 2 interleaved stereo).
+static void eqProcess(int16_t *s, int n, int ch, uint32_t rate) {
+  int want = eqWant < 0 ? 0 : eqWant;
+  if (want != eqHave || rate != eqRate) {
+    const EqPreset &p = EQ_PRESETS[want];
+    eqDesign(eqBands[0], 0, 150, p.bass, rate);
+    eqDesign(eqBands[1], 1, 1500, p.mid, rate);
+    eqDesign(eqBands[2], 2, 5000, p.treble, rate);
+    int boost = max(0, (int)max(p.bass, max(p.mid, p.treble)));
+    eqPre = powf(10, -boost / 20.0f);
+    eqHave = want, eqRate = rate;
+  }
+  if (!eqBands[0].on && !eqBands[1].on && !eqBands[2].on) return;
+  for (int i = 0; i < n; i++) {
+    int c = ch == 2 ? (i & 1) : 0;
+    float x = s[i] * eqPre;
+    for (auto &q : eqBands) {
+      if (!q.on) continue;
+      float y = q.b0 * x + q.z1[c];
+      q.z1[c] = q.b1 * x - q.a1 * y + q.z2[c];
+      q.z2[c] = q.b2 * x - q.a2 * y;
+      x = y;
+    }
+    s[i] = x > 32767 ? 32767 : x < -32768 ? -32768 : (int16_t)x;
+  }
+}
+
+// eq([id]) -> id, name: the preset (saved as the "eq" setting); with an id it
+// is changed first. eq_presets() -> { {id=, name=}, ... }
+static int au_eq(lua_State *L) {
+  if (lua_isstring(L, 1)) {
+    eqWant = eqIndex(lua_tostring(L, 1));
+    cfgSet("eq", EQ_PRESETS[eqWant].id);
+  } else if (eqWant < 0) {
+    eqWant = eqIndex(cfgGet("eq", "flat"));
+  }
+  lua_pushstring(L, EQ_PRESETS[eqWant].id);
+  lua_pushstring(L, EQ_PRESETS[eqWant].name);
+  return 2;
+}
+static int au_eq_presets(lua_State *L) {
+  lua_createtable(L, EQ_COUNT, 0);
+  for (int i = 0; i < EQ_COUNT; i++) {
+    lua_createtable(L, 0, 2);
+    lua_pushstring(L, EQ_PRESETS[i].id); lua_setfield(L, -2, "id");
+    lua_pushstring(L, EQ_PRESETS[i].name); lua_setfield(L, -2, "name");
+    lua_rawseti(L, -2, i + 1);
+  }
+  return 1;
+}
+
 // Decodes the next frame into out as mono; returns the sample count, 0 at the end.
 static int mp3Next(int16_t *out, mp3dec_frame_info_t &info) {
   while (true) {
@@ -373,6 +576,7 @@ static void mp3Task(void *) {
     int16_t *o = mOut[idx];
     int n = mp3Next(o, info);
     if (n <= 0) break;
+    eqProcess(o, n, 1, info.hz);
     while (M5Cardputer.Speaker.isPlaying(0) >= 2 && !aStop && !aPaused && aSeekTo < 0) vTaskDelay(1);
     if (aStop || aSeekTo >= 0) continue;
     M5Cardputer.Speaker.playRaw(o, n, info.hz, false, 1, 0);
@@ -435,6 +639,7 @@ static const char *mp3Start() {
 // the file and frees its buffers). True once audio is idle.
 static bool audioStop() {
   if (aMode == A_IDLE) return true;
+  if (aMode == A_PLAY) fadeOut();
   aStop = true;
   uint32_t t0 = millis();
   while (aMode != A_IDLE && millis() - t0 < 3000) delay(5);
@@ -473,6 +678,7 @@ static int au_record(lua_State *L) {
 
 // Plays an MP3 or 16-bit PCM WAV file. Returns true, or false + reason.
 static int au_play(lua_State *L) {
+  if (eqWant < 0) eqWant = eqIndex(cfgGet("eq", "flat"));
   if (!audioStop()) { lua_pushboolean(L, 0); lua_pushstring(L, "audio busy"); return 2; }
   String real;
   fs::FS *fs = store::resolve(str(L, 1), real);
@@ -481,6 +687,9 @@ static int au_play(lua_State *L) {
   lower.toLowerCase();
   aPaused = false;
   aSeekTo = lua_isnumber(L, 2) && lua_tonumber(L, 2) > 0 ? (int32_t)lua_tonumber(L, 2) : -1;
+  // the speaker's DMA buffers first, while the heap has room for them
+  if (!useSpeaker()) { aFile.close(); lua_pushboolean(L, 0); lua_pushstring(L, "not enough memory for the speaker"); return 2; }
+  spkHeld = true;
   if (lower.endsWith(".mp3")) {
     aStop = false;
     if (!startAudioTask(mp3Task, "mp3")) {
@@ -495,7 +704,7 @@ static int au_play(lua_State *L) {
     }
     aSamples = 0;
     store::pin(true);
-    useSpeaker();
+    fadeIn();
     aMode = A_PLAY;
     xTaskNotifyGive(aTask);
     lua_pushboolean(L, 1);
@@ -533,7 +742,7 @@ static int au_play(lua_State *L) {
   aTotal = dataLen / 2 / ch;
   aSamples = 0;
   store::pin(true);
-  useSpeaker();
+  fadeIn();
   aStop = false;
   aMode = A_PLAY;
   if (!startAudioTask(playTask, "play")) {
@@ -551,14 +760,20 @@ static int au_stop(lua_State *L) {
 
 // pause(on) pauses or resumes playback; returns whether it is paused.
 static int au_pause(lua_State *L) {
-  if (aMode == A_PLAY) aPaused = lua_toboolean(L, 1);
+  bool on = lua_toboolean(L, 1);
+  if (aMode == A_PLAY && on && !aPaused) { fadeOut(); aPaused = true; }
+  else if (aMode == A_PLAY && !on && aPaused) { aPaused = false; fadeIn(); }
   lua_pushboolean(L, aMode == A_PLAY && aPaused);
   return 1;
 }
 
 // seek(seconds) jumps within the playing track.
 static int au_seek(lua_State *L) {
-  if (aMode == A_PLAY) aSeekTo = max(0, (int)luaL_checknumber(L, 1));
+  if (aMode == A_PLAY) {
+    fadeOut();
+    aSeekTo = max(0, (int)luaL_checknumber(L, 1));
+    fadeInAt = millis() + 60;  // once the new position plays (hwTick)
+  }
   return 0;
 }
 
@@ -645,8 +860,9 @@ static int au_analyze(lua_State *L) {
 }
 
 void hwTick() {
+  if (fadeInAt && (int32_t)(millis() - fadeInAt) >= 0) { fadeInAt = 0; if (aMode == A_PLAY && !aPaused) fadeIn(); }
   // Stop the speaker a few seconds after the last sound to free its buffers.
-  if (aMode == A_IDLE && M5Cardputer.Speaker.isRunning()) {
+  if (aMode == A_IDLE && !spkHeld && M5Cardputer.Speaker.isRunning()) {
     if (M5Cardputer.Speaker.isPlaying()) spkLastUse = millis();
     else if (millis() - spkLastUse > 4000) M5Cardputer.Speaker.end();
   }
@@ -659,6 +875,7 @@ void hwTick() {
 // starting Wi-Fi, which needs every KB it can get.
 void hwReleaseAudio() {
   if (aMode != A_IDLE) return;
+  spkHeld = false;
   if (M5Cardputer.Speaker.isRunning()) M5Cardputer.Speaker.end();
   micClose();
 }
@@ -670,8 +887,7 @@ bool hwAudioBusy() { return aMode != A_IDLE; }
 // take the mic's pins and end the recording.
 bool hwUseSpeaker() {
   if (aMode == A_REC) return false;
-  useSpeaker();
-  return true;
+  return useSpeaker();
 }
 
 // =============================================================== ir
@@ -1007,7 +1223,8 @@ static int di_text(lua_State *L) {
 // dropped when an app closes, so their ~40 entries cost nothing until needed.
 static const luaL_Reg audioLib[] = {{"record", au_record}, {"play", au_play}, {"stop", au_stop},
                                     {"pause", au_pause}, {"seek", au_seek}, {"tags", au_tags},
-                                    {"status", au_status}, {"analyze", au_analyze}, {nullptr, nullptr}};
+                                    {"status", au_status}, {"analyze", au_analyze}, {"eq", au_eq},
+                                    {"eq_presets", au_eq_presets}, {nullptr, nullptr}};
 static const luaL_Reg irLib[] = {{"send", ir_send}, {nullptr, nullptr}};
 static const luaL_Reg i2cLib[] = {{"scan", i2_scan}, {"read", i2_read}, {"write", i2_write},
                                   {"read_reg", i2_read_reg}, {"write_reg", i2_write_reg}, {nullptr, nullptr}};

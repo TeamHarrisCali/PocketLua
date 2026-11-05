@@ -108,6 +108,29 @@ static int ml_item(lua_State *L) {
   return nf;
 }
 
+// find(kind, track) -> the row of the artist or album ("artists"/"albums")
+// whose run of tracks holds track row `track`, or nil. Reads the records in
+// order (128 bytes each), for "go to this song's album".
+static int ml_find(lua_State *L) {
+  const char *kind = luaL_checkstring(L, 1);
+  int track = luaL_checkinteger(L, 2) - 1;
+  File file = openKind(kind);
+  if (!file) return 0;
+  char buf[512], *f[8];
+  for (int i = 0;; i++) {
+    int nf = readRec(file, kind, i, buf, f, 8);
+    if (nf < 3) break;
+    int first = atoi(f[nf - 2]), count = atoi(f[nf - 1]);
+    if (track >= first && track < first + count) {
+      file.close();
+      lua_pushinteger(L, i + 1);
+      return 1;
+    }
+  }
+  file.close();
+  return 0;
+}
+
 // albums_in(first, count) -> the albums in a run of tracks (an artist's), as
 // list rows {label=album, value=tracks, first=, count=}.
 static int ml_albums_in(lua_State *L) {
@@ -627,6 +650,6 @@ static int ml_scan_status(lua_State *L) {
   return 3;
 }
 
-extern const luaL_Reg musiclibFns[] = {{"info", ml_info}, {"rows", ml_rows}, {"item", ml_item},
+extern const luaL_Reg musiclibFns[] = {{"info", ml_info}, {"rows", ml_rows}, {"item", ml_item}, {"find", ml_find},
                                        {"albums_in", ml_albums_in}, {"scan", ml_scan},
                                        {"scan_status", ml_scan_status}, {nullptr, nullptr}};
