@@ -53,7 +53,7 @@ void arenaReturn(void *p) {
 // Native buffers that should not fail for want of one contiguous block (the
 // MP3 decoder's ~38 KB): from the heap, else from the arena while it has room
 // to spare beyond what the open app may still need.
-static const size_t ARENA_SPARE = 12 * 1024;
+static const size_t ARENA_SPARE = 6 * 1024;  // Music keeps ~22 KB of the arena free; 12 KB left too little to borrow
 void *audioAlloc(size_t n) {
   void *p = heap_caps_malloc(n, MALLOC_CAP_8BIT);
   if (p || !arena || multi_heap_free_size(arena) < n + ARENA_SPARE) return p;

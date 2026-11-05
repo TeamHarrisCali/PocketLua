@@ -1590,8 +1590,7 @@ static void conPut(const String &arg) {
   fs->rename(real + ".part", real);
   store::rescan();  // the list of card files (and their sizes) changed
   reply("ok " + path + " " + String(got) + " " + String(crc, HEX));
-  usbdev::log("received " + path + " (" + String(got) + " bytes)");
-  notify("Received " + path, String(got / 1024) + " KB");
+  usbdev::log("received " + path + " (" + String(got) + " bytes)");  // no notification: each one stays in RAM
 }
 
 static void conLine(String line) {

@@ -111,7 +111,9 @@ static void scanDir(const String &rel) {
     bool dir = e.isDirectory();
     size_t size = e.size();
     e.close();
-    if (n.startsWith(".") || n.endsWith(".tmp")) continue;
+    // only what can run or be listed: backups (.bak) and unfinished downloads
+    // (.part) cost heap for every file on the card and are never looked up
+    if (n.startsWith(".") || n.endsWith(".tmp") || n.endsWith(".bak") || n.endsWith(".part")) continue;
     if (dir) scanDir(rel + "/" + n);
     else overrides.push_back({rel + "/" + n, size});
   }
@@ -126,6 +128,7 @@ static void scanOverrides() {
   File b = fsys->open(realPath("boot.lua"));
   if (b && !b.isDirectory()) overrides.push_back({"boot.lua", (size_t)b.size()});
   if (b) b.close();
+  overrides.shrink_to_fit();  // no spare capacity left from growing it
 }
 
 // One-time moves, done at boot: the folder was /liveos before the project
