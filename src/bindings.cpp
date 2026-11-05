@@ -29,7 +29,28 @@ extern M5Canvas canvas;
 // settings partition shared with M5Launcher and Wi-Fi; PocketLua filled it and
 // Wi-Fi could no longer start (ESP_ERR_NVS_NOT_ENOUGH_SPACE).
 static const char *SETTINGS_FILE = "data/settings.txt";
-static std::vector<std::pair<String, String>> settings;
+// One String per setting, "key=value": one heap block each instead of two.
+struct Setting {
+  String kv;
+  uint8_t klen;
+  bool is(const char *key) const { return !strncmp(kv.c_str(), key, klen) && key[klen] == 0; }
+  const char *value() const { return kv.c_str() + klen + 1; }
+  void set(const char *key, const String &v) {
+    klen = (uint8_t)strlen(key);
+    String n;
+    n.reserve(klen + 1 + v.length());
+    n += key;
+    n += '=';
+    n += v;
+    kv = n;
+  }
+};
+static std::vector<Setting> settings;
+static Setting makeSetting(const char *key, const String &v) {
+  Setting st;
+  st.set(key, v);
+  return st;
+}
 static bool settingsLoaded = false, settingsDirty = false;
 static uint32_t settingsChanged = 0;
 
@@ -63,7 +84,11 @@ static String unescapeValue(const String &v) {
 
 static void saveSettingsNow() {
   String out;
-  for (auto &kv : settings) out += kv.first + "=" + escapeValue(kv.second) + "\n";
+  for (auto &st : settings) {
+    out.concat(st.kv.c_str(), st.klen + 1);  // "key="
+    out += escapeValue(st.value());
+    out += '\n';
+  }
   if (store::write(SETTINGS_FILE, out)) settingsDirty = false;
 }
 
@@ -84,7 +109,7 @@ static void loadSettings() {
       if (e < 0) e = text.length();
       String line = text.substring(s, e);
       int eq = line.indexOf('=');
-      if (eq > 0) settings.push_back({line.substring(0, eq), unescapeValue(line.substring(eq + 1))});
+      if (eq > 0 && eq < 255) settings.push_back(makeSetting(line.substring(0, eq).c_str(), unescapeValue(line.substring(eq + 1))));
       s = e + 1;
     }
     return;
@@ -93,7 +118,7 @@ static void loadSettings() {
   Preferences p;
   if (p.begin("liveos", false)) {
     for (auto k : OLD_KEYS)
-      if (p.isKey(k)) settings.push_back({k, p.getString(k, "")});
+      if (p.isKey(k)) settings.push_back(makeSetting(k, p.getString(k, "")));
     saveSettingsNow();
     if (!settingsDirty) p.clear();
     p.end();
@@ -101,26 +126,26 @@ static void loadSettings() {
   }
 }
 
-static std::pair<String, String> *findSetting(const char *key) {
+static Setting *findSetting(const char *key) {
   if (!settingsLoaded) {
     loadSettings();  // at boot, while the heap is in one piece
     settings.reserve(settings.size() + SPARE_KEYS);
   }
-  for (auto &kv : settings)
-    if (kv.first == key) return &kv;
+  for (auto &st : settings)
+    if (st.is(key)) return &st;
   return nullptr;
 }
 
 String cfgGet(const char *key, const char *def) {
-  auto *kv = findSetting(key);
-  return kv ? kv->second : String(def);
+  auto *st = findSetting(key);
+  return String(st ? st->value() : def);
 }
 
 void cfgSet(const char *key, const String &value) {
-  auto *kv = findSetting(key);
-  if (kv && kv->second == value) return;
-  if (kv) {
-    kv->second = value;
+  auto *st = findSetting(key);
+  if (st && value == st->value()) return;
+  if (st) {
+    st->set(key, value);
   } else {
     if (settings.size() == settings.capacity()) {
       size_t need = (settings.capacity() + SPARE_KEYS) * sizeof(settings[0]);
@@ -130,7 +155,7 @@ void cfgSet(const char *key, const String &value) {
       }
       settings.reserve(settings.capacity() + SPARE_KEYS);
     }
-    settings.push_back({key, value});
+    settings.push_back(makeSetting(key, value));
   }
   settingsDirty = true;
   settingsChanged = millis();
@@ -139,7 +164,7 @@ void cfgSet(const char *key, const String &value) {
 static void cfgRemove(const char *key) {
   findSetting(key);
   for (size_t i = 0; i < settings.size(); i++)
-    if (settings[i].first == key) {
+    if (settings[i].is(key)) {
       settings.erase(settings.begin() + i);
       settingsDirty = true;
       settingsChanged = millis();
@@ -585,9 +610,9 @@ static int y_storage(lua_State *L) {
 
 // ---------------------------------------------------------------- cfg
 static int c_get(lua_State *L) {
-  auto *kv = findSetting(luaL_checkstring(L, 1));
-  if (!kv) { lua_pushnil(L); return 1; }
-  lua_pushstring(L, kv->second.c_str());
+  auto *st = findSetting(luaL_checkstring(L, 1));
+  if (!st) { lua_pushnil(L); return 1; }
+  lua_pushstring(L, st->value());
   return 1;
 }
 static int c_set(lua_State *L) {

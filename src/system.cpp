@@ -518,7 +518,8 @@ static void drawRing() {
 
 // ================================================================ apps on the device
 struct AppInfo {
-  String name, title, icon, cat;
+  String name, title;
+  char icon[12], cat[10];  // inline: two heap blocks less per installed app
   uint16_t color;
   int order;
 };
@@ -570,10 +571,9 @@ static void scanApps() {
     info.name = name;
     info.title = field(t, "title");
     if (!info.title.length()) info.title = name;
-    info.icon = field(t, "icon");
-    if (!info.icon.length()) info.icon = "app";
-    info.cat = field(t, "category");
-    if (!info.cat.length()) info.cat = "tools";
+    String ic = field(t, "icon"), ca = field(t, "category");
+    strlcpy(info.icon, ic.length() ? ic.c_str() : "app", sizeof info.icon);
+    strlcpy(info.cat, ca.length() ? ca.c_str() : "tools", sizeof info.cat);
     String o = field(t, "order");
     info.order = o.length() ? o.toInt() : 100;
     String c = field(t, "color");
@@ -585,6 +585,7 @@ static void scanApps() {
     if (a.order != b.order) return a.order < b.order;
     return a.title < b.title;
   });
+  apps.shrink_to_fit();  // no spare slots left from growing it
 }
 
 static const AppInfo *findApp(const String &name) {
@@ -902,7 +903,7 @@ static void drawDesktop() {
     int x = x0 + i * slot;
     bool on = (int)i == dockSel;
     if (on) ui::card(x + 1, 82, slot - 2, 41, true);
-    ui::tile(x + 9, 85, 28, a->icon.c_str(), a->color);
+    ui::tile(x + 9, 85, 28, a->icon, a->color);
     String l = ui::fit(a->title, slot - 4);
     ui::text(x + (slot - l.length() * 6) / 2, 115, l.c_str(), on ? col.text : col.muted);
   }
@@ -926,7 +927,7 @@ static std::vector<const AppInfo *> drawerApps() {
       String t = a.title;
       t.toLowerCase();
       if (t.indexOf(q) >= 0) out.push_back(&a);
-    } else if (folder >= 0 && a.cat == CATS[folder]) {
+    } else if (folder >= 0 && !strcmp(a.cat, CATS[folder])) {
       out.push_back(&a);
     }
   }
@@ -946,7 +947,7 @@ static void drawDrawer() {
   if (folder < 0 && !query.length()) {
     for (int i = 0; i < 5; i++) {
       int n = 0;
-      for (auto &a : apps) n += a.cat == CATS[i];
+      for (auto &a : apps) n += !strcmp(a.cat, CATS[i]);
       ui::Row r;
       r.label = CAT_LABELS[i];
       r.value = String(n);
