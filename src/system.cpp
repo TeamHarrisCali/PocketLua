@@ -1792,8 +1792,10 @@ void begin(bool safeMode) {
               (safe ? " (safe mode: skipped)" : ""));
   if (!safe && ssid.length() && autoOn) wifiStartSvc(ssid, cget("wifi_pass"), true);
   if (safe) toast("Safe mode: no background services", 4);
+  // the chime only when switched on: waking from sleep, a firmware update or
+  // a flash over USB restart quietly
   if (esp_reset_reason() == ESP_RST_DEEPSLEEP) usbdev::log("woke from deep sleep");
-  else sound("boot");  // waking from sleep is quiet
+  else if (esp_reset_reason() == ESP_RST_POWERON) sound("boot");
   // after a firmware update from the App Store: did the new build start?
   String expect = cget("fw_expect");
   if (expect.length()) {
