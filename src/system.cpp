@@ -1110,6 +1110,7 @@ static bool conOn = false;
 static const char *B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 static void reply(const String &s) { usbdev::serialWrite(s + "\n"); }
+static void replyData(const String &s) { usbdev::serialWrite(s + "\n", 3000); }  // file contents: don't cut
 
 // Appends received bytes as text. Control bytes are dropped: String::indexOf
 // stops at a NUL, so one stray NUL would hide every later newline and the
@@ -1249,7 +1250,7 @@ static void conLine(String line) {
         uint8_t piece[768];
         int n;
         while ((n = f.read(piece, sizeof piece)) > 0) {
-          reply("!data " + b64encode((const char *)piece, n));
+          replyData("!data " + b64encode((const char *)piece, n));
           feedWatch();
         }
         f.close();
@@ -1260,7 +1261,7 @@ static void conLine(String line) {
       const char *p;
       size_t n;
       if (!store::view(arg, buf, p, n)) { reply("error: not found"); return; }
-      for (size_t i = 0; i < n; i += 768) reply("!data " + b64encode(p + i, min((size_t)768, n - i)));
+      for (size_t i = 0; i < n; i += 768) replyData("!data " + b64encode(p + i, min((size_t)768, n - i)));
       reply("!end");
     } else if (cmd == "fput") conPut(arg);
     else if (cmd == "pins") reply(hwProbe());

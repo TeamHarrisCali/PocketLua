@@ -140,12 +140,12 @@ void key(const String &spec) {
 }
 
 // Writes everything, waiting briefly for buffer space instead of dropping bytes.
-void serialWrite(const String &s) {
+void serialWrite(const String &s, uint32_t waitMs) {
   if (!serialConnected()) return;
   const uint8_t *p = (const uint8_t *)s.c_str();
   size_t off = 0, len = s.length();
   uint32_t t0 = millis();
-  while (off < len && millis() - t0 < 250) {
+  while (off < len && millis() - t0 < waitMs) {
     size_t room = cdc.availableForWrite();
     if (!room) { delay(2); continue; }
     size_t n = room < len - off ? room : len - off;

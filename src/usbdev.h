@@ -18,7 +18,9 @@ bool serialConnected();
 void typeText(const String &s);
 void key(const String &spec);  // e.g. "enter", "ctrl+c", "f5"
 
-void serialWrite(const String &s);
+// Waits up to waitMs for room (a log line gives up quickly; a file sent with
+// !get waits for the computer, or lines would be cut).
+void serialWrite(const String &s, uint32_t waitMs = 250);
 String serialRead();
 int serialGet();  // one received byte, or -1
 
