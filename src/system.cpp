@@ -1114,7 +1114,14 @@ static void deepSleep() {
   settingsFlush();
   delay(900);
   d.sleep();
-  gpio_hold_en(GPIO_NUM_38);  // backlight off while asleep (main.cpp releases it)
+  // Backlight off while asleep. Its pin carries a PWM signal and brightness 0
+  // only takes effect at the next PWM period, so holding the pin at once could
+  // catch it high (screen black, backlight on). Take it off the PWM, drive it
+  // low, then hold it (main.cpp releases the hold at boot).
+  gpio_reset_pin(GPIO_NUM_38);
+  gpio_set_direction(GPIO_NUM_38, GPIO_MODE_OUTPUT);
+  gpio_set_level(GPIO_NUM_38, 0);
+  gpio_hold_en(GPIO_NUM_38);
   gpio_deep_sleep_hold_en();
   esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
   rtc_gpio_pullup_en(GPIO_NUM_0);
