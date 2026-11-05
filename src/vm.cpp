@@ -23,6 +23,7 @@ static const size_t MEM_LIMIT = 160 * 1024;
 static const size_t HEAP_RESERVE = 16 * 1024;
 static multi_heap_handle_t arena = nullptr;
 static void *arenaMem = nullptr;
+static portMUX_TYPE arenaLock = portMUX_INITIALIZER_UNLOCKED;
 
 static void *aMalloc(size_t n) { return arena ? multi_heap_malloc(arena, n) : malloc(n); }
 static void *aRealloc(void *p, size_t n) { return arena ? multi_heap_realloc(arena, p, n) : realloc(p, n); }
@@ -36,6 +37,7 @@ void reserveArena() {
   if (!arenaMem) { usbdev::log("lua arena: could not reserve, using the shared heap"); return; }
   arena = multi_heap_register(arenaMem, ARENA_SIZE);
   if (!arena) { heap_caps_free(arenaMem); arenaMem = nullptr; return; }
+  multi_heap_set_lock(arena, &arenaLock);  // the audio task can use it too (audioAlloc)
   luapool::setBackend(arenaPage, arenaPageFree);
   usbdev::log(String("lua arena: ") + ARENA_SIZE / 1024 + " KB reserved");
 }
@@ -46,6 +48,22 @@ void *arenaBorrow(size_t n) { return arena && !L ? multi_heap_malloc(arena, n) :
 void arenaReturn(void *p) {
   if (arena && p) multi_heap_free(arena, p);
 }
+
+// Native buffers that should not fail for want of one contiguous block (the
+// MP3 decoder's ~38 KB): from the heap, else from the arena while it has room
+// to spare beyond what the open app may still need.
+static const size_t ARENA_SPARE = 12 * 1024;
+void *audioAlloc(size_t n) {
+  void *p = heap_caps_malloc(n, MALLOC_CAP_8BIT);
+  if (p || !arena || multi_heap_free_size(arena) < n + ARENA_SPARE) return p;
+  return multi_heap_malloc(arena, n);
+}
+void audioFree(void *p) {
+  if (!p) return;
+  if (arena && p >= arenaMem && (char *)p < (char *)arenaMem + ARENA_SIZE) multi_heap_free(arena, p);
+  else free(p);
+}
+bool inArena(const void *p) { return arena && p >= arenaMem && (const char *)p < (const char *)arenaMem + ARENA_SIZE; }
 
 size_t arenaFree() { return arena ? multi_heap_free_size(arena) : heap_caps_get_free_size(MALLOC_CAP_8BIT); }
 static const uint32_t CALL_BUDGET_MS = 2500;

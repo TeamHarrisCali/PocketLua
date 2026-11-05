@@ -295,6 +295,36 @@ check(shows("$123456") and shows("0%"), "tip: resumes where it was")
 key("esc"); key("esc")
 check(shell.app() ~= "tip", "tip: Esc with no bill leaves the app")
 
+-- ================================================================ Settings > Backup
+-- a fake backup module (the real one is native: src/backup.cpp)
+local BK = { list = {}, made = 0, restored = nil, removed = nil }
+backup = {
+  list = function() return BK.list end,
+  make = function()
+    BK.made = BK.made + 1
+    table.insert(BK.list, 1, { name = "b0001-20261104-1732.plb", date = "2026-11-04 17:32", size = 2100 })
+    return "b0001-20261104-1732.plb", 3, 2100
+  end,
+  restore = function(name) BK.restored = name; return nil, "test" end,
+  remove = function(name) BK.removed = name; table.remove(BK.list, 1); return true end,
+}
+launch("settings")
+for _ = 1, 6 do key("down") end
+key("enter")
+check(shows("Back up now") and shows("never") and shows("No backups yet"), "backup: page shows none yet")
+key("enter")
+check(BK.made == 1 and shows("Backed up 3 files (3 KB)") and shows("2026-11-04 17:32"), "backup: Back up now makes one and lists it")
+key("down"); key("enter")
+check(shows("Restore") and shows("Delete"), "backup: a backup offers Restore and Delete")
+key("1")
+check(shows("Replace settings"), "backup: restore asks first")
+key("y")
+check(BK.restored == "b0001-20261104-1732.plb" and shows("Restore failed: test"), "backup: yes restores that backup (errors shown)")
+key("enter"); key("2"); key("y")
+check(BK.removed == "b0001-20261104-1732.plb" and shows("No backups yet"), "backup: delete removes it")
+no_error("settings")
+shell.home(); frames(2)
+
 -- ================================================================ App Store
 -- a fake appstore module (the real one is native: src/appstore.cpp)
 local AS = { cat = nil, runs = {}, result = "" }
@@ -359,7 +389,7 @@ check(shell.app() ~= "store" and shell.app() ~= "error", "Esc leaves the store (
 -- ---------------------------------------------------------------- Settings > About > Updates
 local function updates_row()
   launch("settings")
-  for _ = 1, 6 do key("down") end
+  for _ = 1, 7 do key("down") end
   key("enter")   -- About
   key("down")    -- Updates
 end

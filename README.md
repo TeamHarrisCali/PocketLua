@@ -80,6 +80,7 @@ LoRa Chat and GPS need the Cap LoRa-1262. Air Mouse and USB Keys need Settings >
 - **Background timers and daily alarms** keep running whichever app is open.
 - **Resume:** apps remember where you were. Files open in the app that handles their type (`.txt`, `.lua` editor; `.wav` Music; `.bmp`, `.jpg`, `.png` Images).
 - **System sounds** (Settings > Sound), a 12-hour clock option, and screenshots.
+- **Backup and restore** (Settings > Backup): settings, notes, app data and the scripts you made or edited go into one file in `/pocketlua/backups/` (the 5 newest are kept). Music, recordings, screenshots and App Store apps are left out. Restoring writes them back and restarts.
 
 ## Memory
 

@@ -7,7 +7,7 @@ collectgarbage("incremental", 100, 400)
 -- string are created on first use, so an app only pays for what it touches.
 local LAZY = { audio = true, ir = true, i2c = true, http = true, lora = true, gps = true, disp = true,
   musiclib = true, appstore = true, gfx = true, snd = true, imu = true, wifi = true, usb = true, net = true,
-  clock = true, math = true, table = true, utf8 = true, coroutine = true }
+  clock = true, math = true, table = true, utf8 = true, coroutine = true, backup = true }
 setmetatable(_G, { __index = function(t, k)
   if LAZY[k] then
     local lib = sys.hwlib(k)
