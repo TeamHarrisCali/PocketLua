@@ -69,7 +69,15 @@ static void micClose() {
 // seeking fade out first; cutting the sound mid-wave, or powering the
 // headphone driver up at full volume (what M5Unified does), pops loudly in
 // headphones. All on the main task: the I2C bus is shared with the keyboard.
-static uint8_t dacVol = 0;  // the DAC volume last written (0xBF = 0 dB)
+//
+// The volume is set here too, in the codec's DAC (0.5 dB steps, 0xBF = 0 dB):
+// M5Unified's own volume scales the samples before they are cut to 16 bits,
+// which at headphone levels (-30 dB) left ~11 bits of detail. Its master
+// volume stays at unity (UNITY_MASTER) instead.
+static const uint8_t UNITY_MASTER = 182;  // 16 x 182^2 x 255^2 x 2 / 2^36 ~= 1 for mono
+static uint8_t dacVol = 0;                // the DAC volume last written
+static uint8_t dacTarget = 0xBF;          // what the volume setting asks for
+static bool faded = true;                 // faded out (or not started): DAC at 0
 static uint32_t fadeInAt = 0;
 static void dacSet(uint8_t v) {
   if (v == dacVol) return;
@@ -77,11 +85,27 @@ static void dacSet(uint8_t v) {
   dacVol = v;
 }
 static void fadeOut() {
-  if (!dacVol || !M5Cardputer.Speaker.isRunning()) return;
+  if (faded || !M5Cardputer.Speaker.isRunning()) return;
+  faded = true;
   dacSet(0);
   delay(45);  // the codec's ramp (~35 ms)
 }
-static void fadeIn() { if (M5Cardputer.Speaker.isRunning()) dacSet(0xBF); }
+static void fadeIn() {
+  if (!M5Cardputer.Speaker.isRunning()) return;
+  faded = false;
+  dacSet(dacTarget);
+}
+static bool codecVolume() { return M5.getBoard() == m5::board_t::board_M5CardputerADV; }
+
+// The "vol" setting (0-255, see volumeLevel in bindings.cpp) as the codec's
+// DAC volume: each of the 20 levels is as loud as it was with M5Unified's
+// volume (level 20 = +5.9 dB, as master 255 was), 2.5 dB apart.
+void hwSetVolume(int raw) {
+  if (!codecVolume()) { M5Cardputer.Speaker.setVolume(constrain(raw, 0, 255)); return; }
+  int level = volumeLevel(raw);
+  dacTarget = level ? (uint8_t)constrain(0xBF + (int)lroundf(2 * (5.9f + (level - 20) * 2.5f)), 1, 0xFF) : 0;
+  if (!faded && M5Cardputer.Speaker.isRunning()) dacSet(dacTarget);
+}
 
 static bool spkEnable(void *, bool on) {
   if (on) {
@@ -92,6 +116,7 @@ static bool spkEnable(void *, bool on) {
         {0x12, 0x00}, {0x13, 0x10}};                             // DAC and headphone driver on
     for (auto &r : regs) M5.In_I2C.writeRegister8(ES8311, r[0], r[1], 400000);
     dacVol = 0;
+    faded = true;
   } else {
     fadeOut();  // the driver stays powered: switching it off clicks too
   }
@@ -131,11 +156,21 @@ static void micPickSlot() {
   usbdev::log(String("mic slots L=") + l + " R=" + r);
 }
 
-static void useSpeaker() {
+// Playback keeps the speaker driver until its app closes (hwReleaseAudio):
+// once Music has run a while the heap is in pieces and the driver's 8 KB of
+// DMA buffers could not be had again, so songs after a pause played silent.
+static bool spkHeld = false;
+
+static bool useSpeaker() {
   micClose();
-  if (!M5Cardputer.Speaker.isRunning()) M5Cardputer.Speaker.begin();
+  if (!M5Cardputer.Speaker.isRunning() && !M5Cardputer.Speaker.begin()) {
+    usbdev::log(String("speaker: could not start, heap free=") + heap_caps_get_free_size(MALLOC_CAP_8BIT) +
+                " largest=" + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    return false;
+  }
   fadeIn();
   spkLastUse = millis();
+  return true;
 }
 
 // Replaces M5Unified's speaker on/off step (see spkEnable); main.cpp calls it
@@ -163,7 +198,14 @@ struct SpkHook : m5::Speaker_Class {
   static void install(m5::Speaker_Class &spk, bool (*fn)(void *, bool)) { (spk.*(&SpkHook::setCallback))(nullptr, fn); }
 };
 void hwAudioBegin() {
-  if (M5.getBoard() == m5::board_t::board_M5CardputerADV) SpkHook::install(M5Cardputer.Speaker, spkEnable);
+  if (!codecVolume()) return;
+  SpkHook::install(M5Cardputer.Speaker, spkEnable);
+  // 44.1 kHz like nearly all music: M5Unified ran at 48 kHz and resampled by
+  // straight-line interpolation, which dulls the highs and adds distortion
+  auto c = M5Cardputer.Speaker.config();
+  c.sample_rate = 44100;
+  M5Cardputer.Speaker.config(c);
+  M5Cardputer.Speaker.setVolume(UNITY_MASTER);
 }
 
 static bool useMic(uint32_t rate) {
@@ -645,6 +687,9 @@ static int au_play(lua_State *L) {
   lower.toLowerCase();
   aPaused = false;
   aSeekTo = lua_isnumber(L, 2) && lua_tonumber(L, 2) > 0 ? (int32_t)lua_tonumber(L, 2) : -1;
+  // the speaker's DMA buffers first, while the heap has room for them
+  if (!useSpeaker()) { aFile.close(); lua_pushboolean(L, 0); lua_pushstring(L, "not enough memory for the speaker"); return 2; }
+  spkHeld = true;
   if (lower.endsWith(".mp3")) {
     aStop = false;
     if (!startAudioTask(mp3Task, "mp3")) {
@@ -659,7 +704,7 @@ static int au_play(lua_State *L) {
     }
     aSamples = 0;
     store::pin(true);
-    useSpeaker();
+    fadeIn();
     aMode = A_PLAY;
     xTaskNotifyGive(aTask);
     lua_pushboolean(L, 1);
@@ -697,7 +742,7 @@ static int au_play(lua_State *L) {
   aTotal = dataLen / 2 / ch;
   aSamples = 0;
   store::pin(true);
-  useSpeaker();
+  fadeIn();
   aStop = false;
   aMode = A_PLAY;
   if (!startAudioTask(playTask, "play")) {
@@ -817,7 +862,7 @@ static int au_analyze(lua_State *L) {
 void hwTick() {
   if (fadeInAt && (int32_t)(millis() - fadeInAt) >= 0) { fadeInAt = 0; if (aMode == A_PLAY && !aPaused) fadeIn(); }
   // Stop the speaker a few seconds after the last sound to free its buffers.
-  if (aMode == A_IDLE && M5Cardputer.Speaker.isRunning()) {
+  if (aMode == A_IDLE && !spkHeld && M5Cardputer.Speaker.isRunning()) {
     if (M5Cardputer.Speaker.isPlaying()) spkLastUse = millis();
     else if (millis() - spkLastUse > 4000) M5Cardputer.Speaker.end();
   }
@@ -830,6 +875,7 @@ void hwTick() {
 // starting Wi-Fi, which needs every KB it can get.
 void hwReleaseAudio() {
   if (aMode != A_IDLE) return;
+  spkHeld = false;
   if (M5Cardputer.Speaker.isRunning()) M5Cardputer.Speaker.end();
   micClose();
 }
@@ -841,8 +887,7 @@ bool hwAudioBusy() { return aMode != A_IDLE; }
 // take the mic's pins and end the recording.
 bool hwUseSpeaker() {
   if (aMode == A_REC) return false;
-  useSpeaker();
-  return true;
+  return useSpeaker();
 }
 
 // =============================================================== ir

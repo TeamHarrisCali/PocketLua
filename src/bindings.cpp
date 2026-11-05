@@ -3,6 +3,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include "bindings.h"
+#include "hw.h"
 #include "embedded.h"
 #include <vector>
 #include <M5Cardputer.h>
@@ -223,7 +224,7 @@ static int s_tone(lua_State *L) {
 }
 static int s_stop(lua_State *L) { M5Cardputer.Speaker.stop(); return 0; }
 static int s_volume(lua_State *L) {
-  M5Cardputer.Speaker.setVolume((uint8_t)constrain(num(L, 1), 0, 255));
+  hwSetVolume(constrain((int)num(L, 1), 0, 255));
   return 0;
 }
 
@@ -249,7 +250,7 @@ bool headphones() { return cfgGet("hp", "0") == "1"; }
 int headphoneMax() { return constrain(cfgGet("hp_max", "10").toInt(), 1, VOL_LEVELS); }
 static void applyVolume(int raw) {
   cfgSet("vol", String(raw));
-  M5Cardputer.Speaker.setVolume(raw);
+  hwSetVolume(raw);
 }
 void setHeadphones(bool on) {
   if (on == headphones()) return;

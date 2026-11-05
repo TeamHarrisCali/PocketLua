@@ -11,6 +11,7 @@
 #include <vector>
 #include "bindings.h"
 #include "embedded.h"
+#include "hw.h"
 #include "storage.h"
 #include "uikit.h"
 #include "usbdev.h"
@@ -84,7 +85,7 @@ static bool tuneQuiet = false;  // the boot chime plays at a quarter of the volu
 
 static void tuneVolume(bool quiet) {
   int v = cget("vol", "100").toInt();
-  M5Cardputer.Speaker.setVolume(quiet ? max(v / 4, 12) : v);
+  hwSetVolume(quiet ? max(v / 4, 12) : v);
   tuneQuiet = quiet;
 }
 
@@ -587,7 +588,7 @@ static void applySettings() {
   ui::setTheme(cget("theme", "slate").c_str());
   ui::setAccent(cget("accent", "blue").c_str());
   M5Cardputer.Display.setBrightness(cget("bright", "160").toInt());
-  M5Cardputer.Speaker.setVolume(cget("vol", "100").toInt());
+  hwSetVolume(cget("vol", "100").toInt());
   setenv("TZ", tz().c_str(), 1);
   tzset();
   sleepAfter = cget("sleep", "60").toInt();
