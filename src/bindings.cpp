@@ -740,8 +740,9 @@ static int k_now(lua_State *L) {
   time_t t = time(nullptr);
   struct tm tm;
   localtime_r(&t, &tm);
-  lua_createtable(L, 0, 8);
+  lua_createtable(L, 0, 9);
   lua_pushboolean(L, t > 1700000000); lua_setfield(L, -2, "valid");
+  lua_pushinteger(L, (lua_Integer)t); lua_setfield(L, -2, "unix");  // fits 32-bit Lua until 2038
   lua_pushinteger(L, tm.tm_hour); lua_setfield(L, -2, "h");
   lua_pushinteger(L, tm.tm_min); lua_setfield(L, -2, "m");
   lua_pushinteger(L, tm.tm_sec); lua_setfield(L, -2, "s");

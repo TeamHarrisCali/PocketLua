@@ -136,6 +136,11 @@ i2c = { scan = function() return { 0x44, 0x76 } end, read = function(_, n) retur
   write = rec("i2c_write", true), read_reg = function(_, _, n) return string.rep("\0", n) end, write_reg = rec("i2c_wreg", true) }
 http = { get = function() return "Sunny +18C", 200 end,
   download = function(url, path) local s = "local app = { title = \"Web App\", icon = \"app\" }\nreturn app\n"; sys.write_text(path, s); return #s, 200 end, dns = function() return "93.184.216.34" end, ping = function() return 23 end }
+-- stand-ins with the right shapes (the real crypto is tested in tests/mesh.lua)
+crypto = { random = function(n) return string.rep("\7", n) end, public = function(p) return p:reverse() end,
+  shared = function() return string.rep("\1", 32) end, sha256 = function() return string.rep("\2", 32) end,
+  aes_ctr = function(_, _, d) return d end, ccm_encrypt = function(_, _, d) return d, string.rep("\0", 8) end,
+  ccm_decrypt = function(_, _, d) return d end }
 lora = { begin = rec("lora_begin", true), send = rec("lora_send", true), recv = function() return nil end,
   busy = function() return false end, stop = rec("lora_stop") }
 gps = { start = rec("gps_start"), stop = rec("gps_stop"), read = function() return { valid = true, lat = 37.77, lon = -122.42,
@@ -180,7 +185,7 @@ musiclib = { info = function() return nil end, rows = function() return {} end, 
   scan_status = function() return "done", 0, "" end }
 
 -- the device creates these on first use (sys.hwlib); keep copies for that
-for _, n in ipairs({ "audio", "ir", "i2c", "http", "lora", "gps", "disp", "musiclib", "appstore" }) do _G["__hw_" .. n] = _G[n] end
+for _, n in ipairs({ "audio", "ir", "i2c", "http", "lora", "gps", "disp", "musiclib", "appstore", "crypto" }) do _G["__hw_" .. n] = _G[n] end
 
 -- loopback transport: whatever we send comes back as if the peer sent it
 local net_in = {}
