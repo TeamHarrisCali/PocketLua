@@ -3,6 +3,7 @@
 #include <SD.h>
 #include <SPI.h>
 #include <LittleFS.h>
+#include <M5Unified.h>
 #include <algorithm>
 #include "embedded.h"
 
@@ -23,7 +24,18 @@ static uint32_t lastUse = 0;
 // 2 open files at most: each one reserves ~4 KB of RAM for as long as the
 // card is mounted. (MP3 playback holds one; the music library rescan opens
 // its files one after another.)
-static bool sdMount() { return SD.begin(12, SPI, 25000000, "/sd", 2); }
+// The Cap LoRa-1262 shares this SPI bus; its radio's select line (G5) floats
+// until a LoRa app starts, and a floating select makes the radio answer too,
+// so the card never mounts. Hold it high first (ADV only: on the original
+// Cardputer G5 is a keyboard line). SPI.begin is a no-op while the bus runs.
+static bool sdMount() {
+  if (M5.getBoard() == m5::board_t::board_M5CardputerADV) {
+    pinMode(5, OUTPUT);
+    digitalWrite(5, HIGH);
+  }
+  SPI.begin(40, 39, 14, 12);
+  return SD.begin(12, SPI, 25000000, "/sd", 2);
+}
 
 static void scanOverrides();
 bool remove(const String &rel);
@@ -174,7 +186,6 @@ static void migrate() {
 }
 
 bool begin() {
-  SPI.begin(40, 39, 14, 12);
   // a few tries: after a crash the card can still be mid-transfer
   bool mountedSd = sdMount();
   for (int i = 0; i < 3 && !mountedSd; i++) {

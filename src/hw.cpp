@@ -1105,7 +1105,9 @@ static int lo_begin(lua_State *L) {
   ioe.setDirection(0, true);
   ioe.setHighImpedance(0, false);
   ioe.digitalWrite(0, true);  // RF switch
-  if (!radio) radio = new SX1262(radioMod = new Module(5, 4, 3, 6));
+  // given the bus rather than owning it: RadioLib ends a bus it owns when no
+  // chip answers, and that is the SD card's bus
+  if (!radio) radio = new SX1262(radioMod = new Module(5, 4, 3, 6, SPI));
   int st = radio->begin(freq, 125.0, sf, 5, 0x12, power, 12, 3.0, true);
   luaBudgetReset();
   if (st != RADIOLIB_ERR_NONE) { lua_pushboolean(L, 0); lua_pushfstring(L, "radio error %d", st); return 2; }
