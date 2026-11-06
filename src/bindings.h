@@ -17,6 +17,7 @@ bool wifiEnable(bool on);
 size_t wifiStartCost();
 int volumeStep(int d);    // one volume level up/down (20 levels, 2.5 dB apart); returns the level
 int volumeLevel(int raw); // the level of a 0-255 "vol" setting
+int volumeRaw(int level); // a level's 0-255 setting
 bool headphones();        // headphone mode: own volume, capped at headphoneMax()
 int headphoneMax();       // that cap, as a level (1-20)
 void setHeadphones(bool on);  // bytes the next Wi-Fi start is expected to take

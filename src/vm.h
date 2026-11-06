@@ -14,8 +14,8 @@ extern String lastError;
 // buffers fragment the heap, and Lua needs blocks bigger than what is left.
 void reserveArena();
 size_t arenaFree();
-// Buffers for the audio task: the heap first, else the arena if it has
-// 12 KB to spare beyond them. Free with audioFree (either task).
+// Buffers for the audio task: the heap first, else the arena if it keeps
+// 6 KB spare beyond them. Free with audioFree (either task).
 void *audioAlloc(size_t n);
 void audioFree(void *p);
 bool inArena(const void *p);

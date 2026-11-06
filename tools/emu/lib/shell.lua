@@ -103,16 +103,23 @@ end
 function shell.mark_read() ui.status.unread = 0 end
 
 -- ---------------------------------------------------------------- timers and alarms
--- Background countdowns (Clock app, Pomodoro) and daily alarms keep running
--- whatever app is open. Alarms are stored in cfg "alarms" as "HH:MM|label;...".
+-- Background countdowns (Clock app, Pomodoro) and alarms keep running
+-- whatever app is open (as system.cpp does on the device). Alarms are cfg
+-- "alarms": "HH:MM|label|flags;..." (flags: "1"/"0" on, then d/w/e/o repeat).
+-- On the device alarms and timer ends ring full screen; here shell.ringing
+-- records it, and shell.ring_end(snooze) answers it.
 local timers = {}
 shell.timers = timers
+shell.ringing = nil
 
 local next_id = 1
 function shell.start_timer(seconds, label, opts)
-  local t = { id = next_id, left = seconds, total = seconds, label = label or "Timer" }
+  local t = { id = next_id, left = seconds, total = seconds, label = label or "Timer", count = 0 }
   next_id = next_id + 1
-  if opts then t.pomo, t.count, t.work, t.rest = opts.pomo, opts.count or 0, opts.work, opts.rest end
+  if opts then
+    t.pomo, t.count, t.work, t.rest = opts.pomo, opts.count or 0, opts.work, opts.rest
+    t.every, t.long = opts.every or 0, opts.long or 0
+  end
   timers[#timers + 1] = t
   return t
 end
@@ -122,19 +129,61 @@ function shell.cancel_timer(t)
   for i, x in ipairs(timers) do if x == t or x.id == id then table.remove(timers, i); return end end
 end
 
+function shell.finish_timer(t)
+  local id = type(t) == "table" and t.id or t
+  for _, x in ipairs(timers) do if x.id == id then x.left, x.paused = 0, nil end end
+end
+
+function shell.pause_timer(t, on)
+  local id = type(t) == "table" and t.id or t
+  for _, x in ipairs(timers) do if x.id == id then x.paused = on and true or nil end end
+end
+
+local function ring(title, label)
+  shell.wake()
+  shell.ringing = { title = title, label = label }
+end
+function shell.ring_end(snooze)
+  if not shell.ringing then return end
+  if snooze then shell.snooze = "+" .. (tonumber(cfg.get("snooze")) or 1) .. " min" end
+  shell.ringing = nil
+end
+
+-- Clock > Study totals (the device keeps them per day; here the day is fixed)
+local function study_record(minutes)
+  cfg.set("study_day", "20261103")
+  cfg.set("study_min", (tonumber(cfg.get("study_min")) or 0) + minutes)
+  cfg.set("study_n", (tonumber(cfg.get("study_n")) or 0) + 1)
+  if not cfg.get("study_streak") then cfg.set("study_streak", 1) end
+end
+local function study_today()
+  return { minutes = tonumber(cfg.get("study_min")) or 0, sessions = tonumber(cfg.get("study_n")) or 0,
+    streak = tonumber(cfg.get("study_streak")) or 0 }
+end
+shell.study = study_today()
+
 local function timer_tick(dt)
+  shell.study = study_today()  -- a live property on the device
   for i = #timers, 1, -1 do
     local t = timers[i]
-    t.left = t.left - dt
-    if t.left <= 0 then
+    if not t.paused then t.left = t.left - dt end
+    if t.left <= 0 and not t.paused then
       table.remove(timers, i)
-      shell.wake()
-      shell.notify(t.label .. " done", nil, "alarm")
       if t.done then pcall(t.done) end
       if t.pomo then  -- the Pomodoro cycle continues on its own (as on the device)
         local work = t.pomo == "work"
-        shell.start_timer(work and t.rest or t.work, work and "Pomodoro break" or "Pomodoro work",
-          { pomo = work and "break" or "work", count = work and t.count + 1 or t.count, work = t.work, rest = t.rest })
+        if work then study_record(t.work // 60) end
+        local count = work and t.count + 1 or t.count
+        local long = work and (t.every or 0) > 0 and count % t.every == 0
+        shell.wake()
+        shell.notify(work and (long and "Long break" or "Break time") or "Back to focus", nil, "alarm")
+        shell.start_timer(work and (long and t.long or t.rest) or t.work,
+          work and (long and "Pomodoro long break" or "Pomodoro break") or "Pomodoro work",
+          { pomo = work and (long and "long" or "break") or "work", count = count, work = t.work, rest = t.rest,
+            every = t.every, long = t.long })
+      else
+        shell.notify(t.label .. " done", nil, "none")
+        ring(t.label .. " done", "")
       end
     end
   end
@@ -148,10 +197,13 @@ local function alarm_check(t)
   last_alarm_min = key
   local now = string.format("%02d:%02d", t.h, t.m)
   for item in (cfg.get("alarms") or ""):gmatch("[^;]+") do
-    local at, label = item:match("^(%d%d:%d%d)|?(.*)$")
-    if at == now then
-      shell.wake()
-      shell.notify("Alarm " .. shell.format_time(t), label ~= "" and label or nil, "alarm")
+    local at, label, flags = item:match("^(%d%d:%d%d)|?([^|]*)|?(.*)$")
+    local on, rep = flags:sub(1, 1) ~= "0", flags:sub(2, 2)
+    local wd = t.wday or 0
+    local day = rep == "w" and wd >= 1 and wd <= 5 or rep == "e" and (wd == 0 or wd == 6) or (rep ~= "w" and rep ~= "e")
+    if at == now and on and day then
+      shell.notify("Alarm " .. shell.format_time(t), label ~= "" and label or nil, "none")
+      ring(shell.format_time(t), label ~= "" and label or "Alarm")
     end
   end
 end

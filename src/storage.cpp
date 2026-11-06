@@ -72,11 +72,21 @@ static const EmbFile *findEmb(const String &rel) {
 
 // Stored copies of scripts (apps/, lib/, boot.lua), kept in RAM so that
 // loading built-in scripts and drawing the home screen never mount the card.
+// The card's scripts (apps/, lib/, boot.lua): their paths sit in one block
+// ("apps/x/main.lua\0lib/y.lua\0..."), so a hundred files cost one heap
+// block plus 8 bytes each, instead of a String allocation each.
 struct Override {
-  String path;
-  size_t size;
+  uint16_t at;  // where its path starts in `paths`
+  uint32_t size;
 };
 static std::vector<Override> overrides;
+static std::vector<char> paths;
+static const char *opath(const Override &o) { return &paths[o.at]; }
+static void addOverride(const String &rel, size_t size) {
+  if (paths.size() + rel.length() + 1 > 65535) return;  // `at` is 16-bit (~150 files use ~4 KB)
+  overrides.push_back({(uint16_t)paths.size(), (uint32_t)size});
+  paths.insert(paths.end(), rel.c_str(), rel.c_str() + rel.length() + 1);  // with its '\0'
+}
 
 static bool isScript(const String &rel) {
   return rel == "boot.lua" || rel.startsWith("apps/") || rel.startsWith("lib/");
@@ -84,7 +94,7 @@ static bool isScript(const String &rel) {
 
 static Override *findOverride(const String &rel) {
   for (auto &o : overrides)
-    if (o.path == rel) return &o;
+    if (!strcmp(opath(o), rel.c_str())) return &o;
   return nullptr;
 }
 
@@ -92,12 +102,16 @@ static void setOverride(const String &rel, size_t size) {
   if (!isScript(rel)) return;
   Override *o = findOverride(rel);
   if (o) o->size = size;
-  else overrides.push_back({rel, size});
+  else addOverride(rel, size);
 }
 
 static void dropOverrides(const String &rel) {
-  for (size_t i = overrides.size(); i-- > 0;)
-    if (overrides[i].path == rel || overrides[i].path.startsWith(rel + "/")) overrides.erase(overrides.begin() + i);
+  // (their path bytes stay in `paths` until the next scan)
+  String dir = rel + "/";
+  for (size_t i = overrides.size(); i-- > 0;) {
+    const char *p = opath(overrides[i]);
+    if (!strcmp(p, rel.c_str()) || !strncmp(p, dir.c_str(), dir.length())) overrides.erase(overrides.begin() + i);
+  }
 }
 
 static void scanDir(const String &rel) {
@@ -111,9 +125,11 @@ static void scanDir(const String &rel) {
     bool dir = e.isDirectory();
     size_t size = e.size();
     e.close();
-    if (n.startsWith(".") || n.endsWith(".tmp")) continue;
+    // only what can run or be listed: backups (.bak) and unfinished downloads
+    // (.part) cost heap for every file on the card and are never looked up
+    if (n.startsWith(".") || n.endsWith(".tmp") || n.endsWith(".bak") || n.endsWith(".part")) continue;
     if (dir) scanDir(rel + "/" + n);
-    else overrides.push_back({rel + "/" + n, size});
+    else addOverride(rel + "/" + n, size);
   }
   d.close();
 }
@@ -121,11 +137,14 @@ static void scanDir(const String &rel) {
 static void scanOverrides() {
   needScan = false;
   overrides.clear();
+  paths.clear();
   scanDir("apps");
   scanDir("lib");
   File b = fsys->open(realPath("boot.lua"));
-  if (b && !b.isDirectory()) overrides.push_back({"boot.lua", (size_t)b.size()});
+  if (b && !b.isDirectory()) addOverride("boot.lua", b.size());
   if (b) b.close();
+  overrides.shrink_to_fit();  // no spare capacity left from growing them
+  paths.shrink_to_fit();
 }
 
 // One-time moves, done at boot: the folder was /liveos before the project
@@ -373,8 +392,9 @@ std::vector<Entry> list(const String &dirIn) {
   bool scriptDir = !raw && (dir == "apps" || dir == "lib" || dir.startsWith("lib/"));
   if (scriptDir && !locked) {
     for (auto &o : overrides) {
-      if (!o.path.startsWith(prefix)) continue;
-      String rest = o.path.substring(prefix.length());
+      const char *op = opath(o);
+      if (strncmp(op, prefix.c_str(), prefix.length())) continue;
+      String rest = op + prefix.length();
       int s = rest.indexOf('/');
       String name = s >= 0 ? rest.substring(0, s) : rest;
       if (!find(name)) out.push_back({name, s >= 0, true, false, s >= 0 ? 0 : o.size});

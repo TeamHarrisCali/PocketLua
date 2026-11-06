@@ -12,6 +12,8 @@
 #include "bindings.h"
 #include <driver/rtc_io.h>
 #include <esp_sleep.h>
+#include <esp_sntp.h>
+#include <sys/time.h>
 #include "embedded.h"
 #include "mesh.h"
 #include "hw.h"
@@ -43,7 +45,7 @@ namespace shell {
 
 // ================================================================ state
 enum Screen { DESKTOP, DRAWER, APP, ERRSCREEN };
-enum Overlay { OV_NONE, OV_LOCK, OV_QUICK, OV_NOTES, OV_HELP };
+enum Overlay { OV_NONE, OV_LOCK, OV_QUICK, OV_NOTES, OV_HELP, OV_RING };
 static Screen screen = DESKTOP;
 static Overlay overlay = OV_NONE;
 static bool safe = false;
@@ -123,12 +125,15 @@ static void toast(const String &m, float secs = 2) { toastMsg = m; toastLeft = s
 struct Notification { String title, body, time; };
 static std::vector<Notification> notes;
 
+static bool focusQuiet();  // Clock > Study: notifications stay quiet during focus
+
 static void notify(const String &title, const String &body = "", const char *snd = "notify") {
   struct tm tm;
   String t = now(tm) ? formatTime(tm.tm_hour, tm.tm_min) : "";
   notes.insert(notes.begin(), {title, body, t});
   if (notes.size() > 20) notes.pop_back();
   ui::status.unread++;
+  if (strcmp(snd, "alarm") && focusQuiet()) return;  // kept for later, no toast or sound
   toast(title, 3);
   sound(snd);
 }
@@ -254,11 +259,16 @@ static void drawDialog() {
 }
 
 // ================================================================ timers and alarms
+// Timers (countdowns, Pomodoro phases) and alarms belong to the shell, so they
+// go off whatever app is open, and deep sleep (Fn+S) wakes the device for
+// them (sleepSchedule). Alarms and timer ends ring (ringStart) until Enter
+// stops them or any other key snoozes; Pomodoro phases just chime.
 struct Timer {
   int id;
   float left, total;
-  String label, pomo;  // pomo: "work"/"break" for Pomodoro phases
-  int count = 0, work = 0, rest = 0;
+  String label, pomo;  // pomo: "work"/"break"/"long" for Pomodoro phases
+  int count = 0, work = 0, rest = 0, every = 0, longRest = 0;  // every: a long break after that many
+  bool paused = false;
 };
 static std::vector<Timer> timers;
 static int nextTimerId = 1;
@@ -269,34 +279,89 @@ static Timer &startTimer(float secs, const String &label) {
 }
 
 static void wake();
+static void ringStart(const String &title, const String &label);
+
+// Clock > Study: today's focus time, sessions and the streak of days studied
+// ("study_day" YYYYMMDD, "study_min", "study_n", "study_streak").
+static String dayKey(time_t t) {
+  struct tm tm;
+  localtime_r(&t, &tm);
+  char b[12];
+  snprintf(b, sizeof b, "%04d%02d%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+  return b;
+}
+static void studyRecord(int minutes) {
+  time_t t = time(nullptr);
+  if (t < 1700000000) return;  // no clock: no day to count it on
+  String today = dayKey(t), last = cget("study_day");
+  if (last != today) {
+    int streak = last == dayKey(t - 86400) ? cget("study_streak", "0").toInt() + 1 : 1;
+    cfgSet("study_streak", String(streak));
+    cfgSet("study_day", today);
+    cfgSet("study_min", "0");
+    cfgSet("study_n", "0");
+  }
+  cfgSet("study_min", String(cget("study_min", "0").toInt() + minutes));
+  cfgSet("study_n", String(cget("study_n", "0").toInt() + 1));
+}
+// today's minutes, sessions, and the streak (still alive if the last day was yesterday)
+static void studyToday(int &minutes, int &sessions, int &streak) {
+  minutes = sessions = streak = 0;
+  time_t t = time(nullptr);
+  if (t < 1700000000) return;
+  String last = cget("study_day");
+  if (last == dayKey(t)) {
+    minutes = cget("study_min", "0").toInt();
+    sessions = cget("study_n", "0").toInt();
+    streak = cget("study_streak", "0").toInt();
+  } else if (last == dayKey(t - 86400)) {
+    streak = cget("study_streak", "0").toInt();
+  }
+}
+static bool focusQuiet() {
+  if (cget("study_quiet") != "1") return false;
+  for (auto &t : timers)
+    if (t.pomo == "work" && !t.paused) return true;
+  return false;
+}
 
 static void timerTick(float dt) {
   for (size_t i = 0; i < timers.size();) {
     Timer &t = timers[i];
-    t.left -= dt;
-    if (t.left > 0) { i++; continue; }
+    if (!t.paused) t.left -= dt;
+    if (t.left > 0 || t.paused) { i++; continue; }
     Timer done = t;
     timers.erase(timers.begin() + i);
-    wake();
-    notify(done.label + " done", "", "alarm");
-    if (done.pomo.length()) {  // the Pomodoro cycle continues on its own
-      bool work = done.pomo == "work";
-      Timer &n = startTimer(work ? done.rest : done.work, work ? "Pomodoro break" : "Pomodoro work");
-      n.pomo = work ? "break" : "work";
-      n.count = work ? done.count + 1 : done.count;
-      n.work = done.work;
-      n.rest = done.rest;
+    if (!done.pomo.length()) {
+      notify(done.label + " done", "", "none");
+      ringStart(done.label + " done", "");
+      continue;
     }
+    // the Pomodoro cycle continues on its own: work, break, ..., a long break every `every`
+    bool work = done.pomo == "work";
+    if (work) studyRecord(done.work / 60);
+    int count = work ? done.count + 1 : done.count;
+    bool longBreak = work && done.every > 0 && count % done.every == 0;
+    wake();
+    notify(work ? (longBreak ? "Long break" : "Break time") : "Back to focus", "", "alarm");
+    Timer &n = startTimer(work ? (longBreak ? done.longRest : done.rest) : done.work,
+                          work ? (longBreak ? "Pomodoro long break" : "Pomodoro break") : "Pomodoro work");
+    n.pomo = work ? (longBreak ? "long" : "break") : "work";
+    n.count = count;
+    n.work = done.work;
+    n.rest = done.rest;
+    n.every = done.every;
+    n.longRest = done.longRest;
   }
 }
 
-static int lastAlarmMin = -1;
-static void alarmCheck(const struct tm &tm) {
-  int key = tm.tm_hour * 60 + tm.tm_min;
-  if (key == lastAlarmMin) return;
-  lastAlarmMin = key;
-  char nowS[6];
-  snprintf(nowS, sizeof nowS, "%02d:%02d", tm.tm_hour, tm.tm_min);
+// Alarms: cfg "alarms" = "HH:MM|label|flags;..." where flags is "1"/"0" (on)
+// and a repeat letter: d daily, w weekdays, e weekends, o once (turned off
+// after it rings). Old entries without flags are daily and on.
+struct Alarm { int h, m; String label; bool on; char rep; };
+static std::vector<Alarm> alarmList() {
+  std::vector<Alarm> out;
+  out.reserve(12);  // the Clock app allows 12
   String all = cget("alarms");
   int start = 0;
   while (start < (int)all.length()) {
@@ -304,17 +369,157 @@ static void alarmCheck(const struct tm &tm) {
     if (end < 0) end = all.length();
     String item = all.substring(start, end);
     start = end + 1;
-    if (item.startsWith(nowS)) {
-      int bar = item.indexOf('|');
-      wake();
-      notify("Alarm " + formatTime(tm.tm_hour, tm.tm_min), bar >= 0 ? item.substring(bar + 1) : "", "alarm");
+    if (item.length() < 5 || item[2] != ':') continue;
+    Alarm a{item.substring(0, 2).toInt(), item.substring(3, 5).toInt(), "", true, 'd'};
+    int b1 = item.indexOf('|'), b2 = b1 >= 0 ? item.indexOf('|', b1 + 1) : -1;
+    if (b1 >= 0) a.label = item.substring(b1 + 1, b2 >= 0 ? b2 : item.length());
+    if (b2 >= 0 && b2 + 1 < (int)item.length()) {
+      a.on = item[b2 + 1] != '0';
+      if (b2 + 2 < (int)item.length()) a.rep = item[b2 + 2];
+    }
+    if (a.h < 24 && a.m < 60) out.push_back(a);
+  }
+  return out;
+}
+static bool alarmDay(const Alarm &a, int wday) {  // wday 0 = Sunday
+  if (a.rep == 'w') return wday >= 1 && wday <= 5;
+  if (a.rep == 'e') return wday == 0 || wday == 6;
+  return true;
+}
+static void alarmTurnOff(const Alarm &a) {  // a "once" alarm after it rang
+  String all = cget("alarms"), out;
+  char head[6];
+  snprintf(head, sizeof head, "%02d:%02d", a.h, a.m);
+  int start = 0;
+  while (start < (int)all.length()) {
+    int end = all.indexOf(';', start);
+    if (end < 0) end = all.length();
+    String item = all.substring(start, end);
+    start = end + 1;
+    if (item.startsWith(head) && item.endsWith("|1o")) item = item.substring(0, item.length() - 2) + "0o";
+    out += (out.length() ? ";" : "") + item;
+  }
+  cfgSet("alarms", out);
+}
+
+static int lastAlarmMin = -1;
+static void alarmCheck(const struct tm &tm) {
+  int key = tm.tm_hour * 60 + tm.tm_min;
+  if (key == lastAlarmMin) return;
+  lastAlarmMin = key;
+  for (auto &a : alarmList()) {
+    if (!a.on || a.h != tm.tm_hour || a.m != tm.tm_min || !alarmDay(a, tm.tm_wday)) continue;
+    if (a.rep == 'o') alarmTurnOff(a);
+    notify("Alarm " + formatTime(a.h, a.m), a.label, "none");
+    ringStart(formatTime(a.h, a.m), a.label.length() ? a.label : String("Alarm"));
+  }
+}
+
+// Seconds until the next alarm goes off (counting repeat days), or -1.
+static long secondsToNextAlarm() {
+  time_t t = time(nullptr);
+  if (t < 1700000000) return -1;
+  long best = -1;
+  for (auto &a : alarmList()) {
+    if (!a.on) continue;
+    for (int d = 0; d < 8; d++) {
+      time_t day = t + (time_t)d * 86400;
+      struct tm tm;
+      localtime_r(&day, &tm);
+      tm.tm_hour = a.h, tm.tm_min = a.m, tm.tm_sec = 0, tm.tm_isdst = -1;
+      time_t at = mktime(&tm);
+      if (at <= t || !alarmDay(a, tm.tm_wday)) continue;
+      if (best < 0 || at - t < best) best = at - t;
+      break;
     }
   }
+  return best;
+}
+
+// ---------------------------------------------------------------- ringing
+// A full-screen alarm over everything. It repeats its sound until Enter (or
+// X) stops it; any other key, or G0, snoozes it ("snooze" minutes, 1 at
+// first). After 5 minutes unanswered it stops and leaves a notification.
+struct Ring {
+  bool on = false;
+  String title, label;
+  uint32_t since = 0, lastSound = 0;
+  int prevVol = -1;
+  Overlay under = OV_NONE;  // what was showing (the lock screen stays locked)
+};
+static Ring ring;
+static time_t snoozeAt = 0;
+static String snoozeTitle, snoozeLabel;
+
+static void ringStart(const String &title, const String &label) {
+  wake();
+  ring.on = true;
+  ring.title = title;
+  ring.label = label;
+  ring.since = millis();
+  ring.lastSound = 0;
+  // loud enough to wake you, except in headphone mode (its cap protects the ears)
+  int raw = cget("vol", "100").toInt();
+  ring.prevVol = -1;
+  if (!headphones() && volumeLevel(raw) < 12) {
+    ring.prevVol = raw;
+    hwSetVolume(volumeRaw(12));
+  }
+  g_displayHold = false;  // an app's own drawing gives way to the alarm
+  if (overlay != OV_RING) ring.under = overlay == OV_LOCK ? OV_LOCK : OV_NONE;
+  overlay = OV_RING;
+  usbdev::log("ring: " + title + " " + label);
+}
+
+static void ringEnd(bool snooze) {
+  if (!ring.on) return;
+  ring.on = false;
+  tune = nullptr;
+  if (ring.prevVol >= 0) hwSetVolume(ring.prevVol);
+  overlay = ring.under;
+  if (snooze) {
+    int m = constrain(cget("snooze", "1").toInt(), 1, 60);
+    snoozeAt = time(nullptr) + m * 60;
+    snoozeTitle = ring.title;
+    snoozeLabel = ring.label;
+    toast(String("Snoozed ") + m + " min", 2);
+  }
+}
+
+static void ringTick() {
+  if (snoozeAt && time(nullptr) >= snoozeAt) {
+    snoozeAt = 0;
+    ringStart(snoozeTitle, snoozeLabel);
+  }
+  if (!ring.on) return;
+  wake();  // the screen stays on while it rings
+  if (millis() - ring.since > 5 * 60 * 1000UL) {
+    String t = ring.title, l = ring.label;
+    ringEnd(false);
+    notify("Missed: " + t, l, "none");
+    return;
+  }
+  if (tune) ring.lastSound = millis();
+  else if (millis() - ring.lastSound > 600) { sound("alarm", true); ring.lastSound = millis(); }
+}
+
+static void drawRing() {
+  bool flash = (millis() / 500) % 2;
+  ui::fill(0, 14, 240, 121, col.bg);
+  ui::rfill(8, 20, 224, 88, 8, flash ? col.accent : col.surface);
+  uint16_t fg = flash ? col.on_accent : col.text;
+  ui::center(30, ring.title.c_str(), fg, 3);
+  ui::center(62, ui::fit(ring.label, 210).c_str(), fg, 1);
+  String sn = String("Any key: snooze ") + constrain(cget("snooze", "1").toInt(), 1, 60) + " min";
+  ui::center(84, sn.c_str(), flash ? col.on_accent : col.muted, 1);
+  static const ui::Hint h[] = {{"Enter", "Stop"}, {"Key", "Snooze"}, {"G0", "Snooze"}};
+  ui::footer(h, 3);
 }
 
 // ================================================================ apps on the device
 struct AppInfo {
-  String name, title, icon, cat;
+  String name, title;
+  char icon[12], cat[10];  // inline: two heap blocks less per installed app
   uint16_t color;
   int order;
 };
@@ -366,10 +571,9 @@ static void scanApps() {
     info.name = name;
     info.title = field(t, "title");
     if (!info.title.length()) info.title = name;
-    info.icon = field(t, "icon");
-    if (!info.icon.length()) info.icon = "app";
-    info.cat = field(t, "category");
-    if (!info.cat.length()) info.cat = "tools";
+    String ic = field(t, "icon"), ca = field(t, "category");
+    strlcpy(info.icon, ic.length() ? ic.c_str() : "app", sizeof info.icon);
+    strlcpy(info.cat, ca.length() ? ca.c_str() : "tools", sizeof info.cat);
     String o = field(t, "order");
     info.order = o.length() ? o.toInt() : 100;
     String c = field(t, "color");
@@ -381,6 +585,7 @@ static void scanApps() {
     if (a.order != b.order) return a.order < b.order;
     return a.title < b.title;
   });
+  apps.shrink_to_fit();  // no spare slots left from growing it
 }
 
 static const AppInfo *findApp(const String &name) {
@@ -698,7 +903,7 @@ static void drawDesktop() {
     int x = x0 + i * slot;
     bool on = (int)i == dockSel;
     if (on) ui::card(x + 1, 82, slot - 2, 41, true);
-    ui::tile(x + 9, 85, 28, a->icon.c_str(), a->color);
+    ui::tile(x + 9, 85, 28, a->icon, a->color);
     String l = ui::fit(a->title, slot - 4);
     ui::text(x + (slot - l.length() * 6) / 2, 115, l.c_str(), on ? col.text : col.muted);
   }
@@ -722,7 +927,7 @@ static std::vector<const AppInfo *> drawerApps() {
       String t = a.title;
       t.toLowerCase();
       if (t.indexOf(q) >= 0) out.push_back(&a);
-    } else if (folder >= 0 && a.cat == CATS[folder]) {
+    } else if (folder >= 0 && !strcmp(a.cat, CATS[folder])) {
       out.push_back(&a);
     }
   }
@@ -742,7 +947,7 @@ static void drawDrawer() {
   if (folder < 0 && !query.length()) {
     for (int i = 0; i < 5; i++) {
       int n = 0;
-      for (auto &a : apps) n += a.cat == CATS[i];
+      for (auto &a : apps) n += !strcmp(a.cat, CATS[i]);
       ui::Row r;
       r.label = CAT_LABELS[i];
       r.value = String(n);
@@ -1093,6 +1298,125 @@ static void notesKey(const Key &k) {
   else if (key == "esc") overlay = OV_NONE;
 }
 
+// ================================================================ alarms through deep sleep
+// Deep sleep keeps the chip's RTC memory and clock running: timers and a
+// snooze are saved there with their end times, and the RTC timer wakes the
+// device for the next event (an alarm, a snooze, a timer, a Pomodoro phase).
+// The RTC clock has no crystal and drifts; when network time arrives after a
+// wake the error is measured ("rtc_ppm") and later sleeps correct for it.
+struct RtcTimer {
+  int32_t end;
+  float left, total;
+  char label[24], pomo[8];
+  int16_t count, work, rest, every, longRest;
+  uint8_t paused;
+};
+static const uint32_t RTC_MAGIC = 0x504C534C;  // "PLSL"
+RTC_DATA_ATTR static uint32_t rtcMagic;
+RTC_DATA_ATTR static int32_t rtcSleptAt, rtcSnoozeAt, rtcAlarmAt;
+RTC_DATA_ATTR static char rtcSnoozeTitle[24], rtcSnoozeLabel[32];
+RTC_DATA_ATTR static uint8_t rtcTimerN;
+RTC_DATA_ATTR static RtcTimer rtcTimers[6];
+static long sleptSecs = 0;          // how long the last deep sleep was (0: not woken from one)
+static time_t bootEpoch = 0;        // the clock and millis() when it woke, for the drift check
+static uint32_t bootMs = 0;
+
+static float rtcRatio() {  // RTC seconds per real second - 1 (from "rtc_ppm")
+  return constrain(cget("rtc_ppm", "0").toInt(), -50000, 50000) / 1e6f;
+}
+
+static void sleepSchedule() {
+  time_t t = time(nullptr);
+  long wakeIn = -1;
+  String why;
+  auto consider = [&](long secs, const String &what) {
+    if (secs > 0 && (wakeIn < 0 || secs < wakeIn)) { wakeIn = secs; why = what; }
+  };
+  rtcTimerN = 0;
+  for (auto &tm : timers) {
+    if (rtcTimerN >= 6) break;
+    RtcTimer &r = rtcTimers[rtcTimerN++];
+    r.end = t + (int32_t)ceilf(tm.left);
+    r.left = tm.left, r.total = tm.total;
+    strlcpy(r.label, tm.label.c_str(), sizeof r.label);
+    strlcpy(r.pomo, tm.pomo.c_str(), sizeof r.pomo);
+    r.count = tm.count, r.work = tm.work, r.rest = tm.rest, r.every = tm.every, r.longRest = tm.longRest;
+    r.paused = tm.paused;
+    if (!tm.paused) consider((long)ceilf(tm.left), tm.label);
+  }
+  rtcSnoozeAt = snoozeAt;
+  strlcpy(rtcSnoozeTitle, snoozeTitle.c_str(), sizeof rtcSnoozeTitle);
+  strlcpy(rtcSnoozeLabel, snoozeLabel.c_str(), sizeof rtcSnoozeLabel);
+  if (snoozeAt) consider(snoozeAt - t, "a snoozed alarm");
+  long a = secondsToNextAlarm();
+  rtcAlarmAt = a > 0 ? t + a : 0;
+  if (a > 0) consider(a, "an alarm");
+  rtcSleptAt = t;
+  rtcMagic = RTC_MAGIC;
+  if (wakeIn > 0) {
+    // the RTC counts (1 + ratio) seconds per real one, so ask for that many
+    esp_sleep_enable_timer_wakeup((uint64_t)(wakeIn * (1 + rtcRatio()) * 1e6));
+    usbdev::log(String("sleep: wakes in ") + wakeIn + " s for " + why);
+  }
+}
+
+// At boot after deep sleep: the clock corrected for the measured drift, the
+// timers and snooze back, and an alarm that was missed by waking late rings.
+static void sleepRestore() {
+  if (esp_reset_reason() != ESP_RST_DEEPSLEEP || rtcMagic != RTC_MAGIC) return;
+  rtcMagic = 0;
+  time_t t = time(nullptr);
+  float r = rtcRatio();
+  if (r != 0 && rtcSleptAt > 1700000000) {
+    time_t fixed = rtcSleptAt + (time_t)lroundf((t - rtcSleptAt) / (1 + r));
+    struct timeval tv = {fixed, 0};
+    settimeofday(&tv, nullptr);
+    t = fixed;
+  }
+  sleptSecs = t - rtcSleptAt;
+  bootEpoch = t;
+  bootMs = millis();
+  for (int i = 0; i < rtcTimerN; i++) {
+    RtcTimer &rt = rtcTimers[i];
+    Timer &tm = startTimer(rt.total, rt.label);
+    tm.left = rt.paused ? rt.left : max(0.01f, (float)(rt.end - t));  // past due: ends on the first tick
+    tm.pomo = rt.pomo;
+    tm.count = rt.count, tm.work = rt.work, tm.rest = rt.rest, tm.every = rt.every, tm.longRest = rt.longRest;
+    tm.paused = rt.paused;
+  }
+  if (rtcSnoozeAt) {
+    snoozeAt = rtcSnoozeAt;
+    snoozeTitle = rtcSnoozeTitle;
+    snoozeLabel = rtcSnoozeLabel;
+  }
+  bool byTimer = esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER;
+  usbdev::log(String("woke after ") + sleptSecs + " s asleep (" + (byTimer ? "timer" : "G0") + "), " +
+              rtcTimerN + " timers kept");
+  // woke after the alarm's minute (the RTC ran slow): ring it now
+  if (rtcAlarmAt && t >= rtcAlarmAt + 60 && t - rtcAlarmAt < 30 * 60) {
+    time_t at = rtcAlarmAt;
+    struct tm tm;
+    localtime_r(&at, &tm);
+    for (auto &al : alarmList()) {
+      if (!al.on || al.h != tm.tm_hour || al.m != tm.tm_min) continue;
+      if (al.rep == 'o') alarmTurnOff(al);
+      ringStart(formatTime(al.h, al.m), al.label.length() ? al.label : String("Alarm"));
+      usbdev::log(String("alarm rang late by ") + (t - rtcAlarmAt) + " s after waking");
+      break;
+    }
+  }
+}
+
+// Network time arrived: after a sleep, how far off was the RTC? Kept as
+// "rtc_ppm" (added to what earlier sleeps measured) for the next sleep.
+static volatile long driftCheck = 0;  // seconds of error found by the SNTP task, logged by services()
+static void onTimeSync(struct timeval *tv) {
+  if (!sleptSecs || !bootEpoch || sleptSecs < 600) return;
+  long expected = bootEpoch + (long)((millis() - bootMs) / 1000);
+  driftCheck = (long)tv->tv_sec - expected;
+  if (!driftCheck) driftCheck = 1000000;  // "checked, no error"
+}
+
 // ================================================================ deep sleep (Fn+S)
 // Everything off but the chip's low-power core, which waits for the G0 button
 // (the one that means Home). Waking is a restart: the app was saved and
@@ -1111,6 +1435,7 @@ static void deepSleep() {
   mesh::stop();
   if (WiFi.getMode() != WIFI_OFF) wifiEnable(false);
   hwSleepPrepare();
+  sleepSchedule();  // the RTC timer wakes it for the next alarm or timer
   settingsFlush();
   delay(900);
   d.sleep();
@@ -1266,8 +1591,7 @@ static void conPut(const String &arg) {
   fs->rename(real + ".part", real);
   store::rescan();  // the list of card files (and their sizes) changed
   reply("ok " + path + " " + String(got) + " " + String(crc, HEX));
-  usbdev::log("received " + path + " (" + String(got) + " bytes)");
-  notify("Received " + path, String(got / 1024) + " KB");
+  usbdev::log("received " + path + " (" + String(got) + " bytes)");  // no notification: each one stays in RAM
 }
 
 static void conLine(String line) {
@@ -1437,6 +1761,15 @@ static void services() {
     ui::status.time = "";
   }
   sleepAfter = cget("sleep", "60").toInt();
+  if (driftCheck) {
+    long err = driftCheck == 1000000 ? 0 : driftCheck;
+    driftCheck = 0;
+    // real time ahead of the estimate (err > 0) means the RTC counted fast: less correction
+    long ppm = constrain(cget("rtc_ppm", "0").toInt() - (long)(err * 1e6 / sleptSecs), -50000L, 50000L);
+    cfgSet("rtc_ppm", String(ppm));
+    usbdev::log(String("clock: off by ") + err + " s after " + sleptSecs / 60 + " min asleep; drift now " + ppm + " ppm");
+    sleptSecs = 0;
+  }
   roamTick();
 }
 
@@ -1448,6 +1781,8 @@ void begin(bool safeMode) {
   notes.reserve(21);
   savedStates.reserve(11);
   applySettings();
+  sleepRestore();
+  sntp_set_time_sync_notification_cb(onTimeSync);
   if (!safe) appstoreBoot();
   scanApps();
   conOn = !safe && cget("usb_console") == "1" && usbdev::serialOn();
@@ -1457,8 +1792,10 @@ void begin(bool safeMode) {
               (safe ? " (safe mode: skipped)" : ""));
   if (!safe && ssid.length() && autoOn) wifiStartSvc(ssid, cget("wifi_pass"), true);
   if (safe) toast("Safe mode: no background services", 4);
+  // the chime only when switched on: waking from sleep, a firmware update or
+  // a flash over USB restart quietly
   if (esp_reset_reason() == ESP_RST_DEEPSLEEP) usbdev::log("woke from deep sleep");
-  else sound("boot");  // waking from sleep is quiet
+  else if (esp_reset_reason() == ESP_RST_POWERON) sound("boot");
   // after a firmware update from the App Store: did the new build start?
   String expect = cget("fw_expect");
   if (expect.length()) {
@@ -1495,6 +1832,7 @@ void update(float dt) {
   if (serviceAcc >= 1) { serviceAcc = 0; services(); }
   soundTick(dt);
   timerTick(dt);
+  ringTick();
   conPoll();
   if (toastMsg.length()) { toastLeft -= dt; if (toastLeft <= 0) toastMsg = ""; }
   if (!asleep) {
@@ -1544,7 +1882,8 @@ void drawBand() {
   }
   if (safe) title = "SAFE - " + title;
   ui::statusbar(title.c_str());
-  if (overlay == OV_LOCK) drawLock();
+  if (overlay == OV_RING) drawRing();
+  else if (overlay == OV_LOCK) drawLock();
   else if (overlay == OV_QUICK) drawQuick();
   else if (overlay == OV_NOTES) drawNotes();
   else if (overlay == OV_HELP) drawHelp();
@@ -1581,6 +1920,11 @@ static void appKey(const Key &k) {
 
 void key(const Key &k) {
   if (asleep || g_displayAsleep) { wake(); return; }
+  if (ring.on) {
+    bool stop = !strcmp(k.key, "enter") || (k.text && tolower(k.text[0]) == 'x' && !k.fn);
+    ringEnd(!stop);
+    return;
+  }
   idle = 0;
   if (cget("click") == "1") playTone(2400, 6);
   if (!strcmp(k.key, "home")) {
@@ -1708,11 +2052,31 @@ static int l_start_timer(lua_State *L) {
     lua_getfield(L, 3, "count"); t.count = lua_tointeger(L, -1); lua_pop(L, 1);
     lua_getfield(L, 3, "work"); t.work = lua_tointeger(L, -1); lua_pop(L, 1);
     lua_getfield(L, 3, "rest"); t.rest = lua_tointeger(L, -1); lua_pop(L, 1);
+    lua_getfield(L, 3, "every"); t.every = lua_tointeger(L, -1); lua_pop(L, 1);
+    lua_getfield(L, 3, "long"); t.longRest = lua_tointeger(L, -1); lua_pop(L, 1);
   }
   lua_createtable(L, 0, 2);
   lua_pushinteger(L, t.id); lua_setfield(L, -2, "id");
   lua_pushstring(L, t.label.c_str()); lua_setfield(L, -2, "label");
   return 1;
+}
+// finish_timer(t): ends it now (a Pomodoro phase moves on to the next)
+static int l_finish_timer(lua_State *L) {
+  int id = 0;
+  if (lua_istable(L, 1)) { lua_getfield(L, 1, "id"); id = lua_tointeger(L, -1); lua_pop(L, 1); }
+  else id = (int)luaL_optinteger(L, 1, 0);
+  for (auto &t : timers)
+    if (t.id == id) { t.left = 0, t.paused = false; }
+  return 0;
+}
+// pause_timer(t, on): a paused timer keeps its time left
+static int l_pause_timer(lua_State *L) {
+  int id = 0;
+  if (lua_istable(L, 1)) { lua_getfield(L, 1, "id"); id = lua_tointeger(L, -1); lua_pop(L, 1); }
+  else id = (int)luaL_optinteger(L, 1, 0);
+  for (auto &t : timers)
+    if (t.id == id) t.paused = lua_toboolean(L, 2);
+  return 0;
 }
 static int l_cancel_timer(lua_State *L) {
   int id = 0;
@@ -1779,8 +2143,26 @@ static int l_index(lua_State *L) {
       lua_pushnumber(L, t.total); lua_setfield(L, -2, "total");
       if (t.pomo.length()) { lua_pushstring(L, t.pomo.c_str()); lua_setfield(L, -2, "pomo"); }
       lua_pushinteger(L, t.count); lua_setfield(L, -2, "count");
+      lua_pushinteger(L, t.every); lua_setfield(L, -2, "every");
+      lua_pushboolean(L, t.paused); lua_setfield(L, -2, "paused");
       lua_rawseti(L, -2, i + 1);
     }
+    return 1;
+  }
+  if (k == "study") {  // {minutes=, sessions=, streak=} for today
+    int m, n, st;
+    studyToday(m, n, st);
+    lua_createtable(L, 0, 3);
+    lua_pushinteger(L, m); lua_setfield(L, -2, "minutes");
+    lua_pushinteger(L, n); lua_setfield(L, -2, "sessions");
+    lua_pushinteger(L, st); lua_setfield(L, -2, "streak");
+    return 1;
+  }
+  if (k == "snooze") {  // when a snoozed alarm rings again ("07:31"), or nil
+    if (!snoozeAt) return 0;
+    struct tm tm;
+    localtime_r(&snoozeAt, &tm);
+    lua_pushstring(L, formatTime(tm.tm_hour, tm.tm_min).c_str());
     return 1;
   }
   if (k == "log") {
@@ -1821,7 +2203,8 @@ void registerLua(lua_State *L) {
       {"notify", l_notify}, {"sound", l_sound}, {"launch", l_launch}, {"edit", l_edit}, {"home", l_home},
       {"back", l_back}, {"open_file", l_open_file}, {"run_file", l_run_file}, {"app", l_app},
       {"format_time", l_format_time}, {"tz", l_tz}, {"wifi_start", l_wifi_start}, {"wifi_stop", l_wifi_stop}, {"focus", l_focus},
-      {"start_timer", l_start_timer}, {"cancel_timer", l_cancel_timer}, {"free_memory", l_free_memory},
+      {"start_timer", l_start_timer}, {"cancel_timer", l_cancel_timer}, {"pause_timer", l_pause_timer},
+      {"finish_timer", l_finish_timer}, {"free_memory", l_free_memory},
       {"screenshot", l_screenshot}, {"sleep_after", l_sleep_after}, {"lock", l_lock}, {"wake", l_wake},
       {"apply_settings", l_apply_settings}, {"overlay", l_overlay}, {"close_overlay", l_close_overlay},
       {"overlay_name", l_overlay_name}, {"console_running", l_console_running}, {"mark_read", l_mark_read},

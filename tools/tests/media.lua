@@ -301,6 +301,22 @@ key("esc")
 alive("music", "Esc is ignored while scanning")
 scan_state = "done"; frames(2)
 check(has(screen(), "Artists") and toasts[#toasts] == "Library: 2 tracks", "music: back to the menu when the scan is done")
+-- shuffle: back, then forward, plays the same songs again
+for _ = 1, 4 do key("down") end
+key("enter")  -- Shuffle all
+local s1 = last("play")[2]
+key("/"); local s2 = last("play")[2]
+key("/"); local s3 = last("play")[2]
+key(","); key(",")
+check(last("play")[2] == s1, "music: shuffle goes back through the songs played")
+key("/")
+check(last("play")[2] == s2, "music: then forward replays the same next song")
+key("/")
+check(last("play")[2] == s3, "music: and the one after it")
+key("/")
+check(last("play")[2] ~= s3, "music: past them, a new song is picked")
+key(",")
+check(last("play")[2] == s3, "music: back from a new pick returns to the previous song")
 shell.home(); frames(2)
 musiclib, __hw_musiclib = saved_lib, saved_lib
 for _, n in ipairs({ "a_song.wav", "b_song.wav", "notes.txt", "Artist/Album/01 First.mp3", "Artist/Album/02 Second.mp3" }) do

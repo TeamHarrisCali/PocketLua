@@ -191,7 +191,7 @@ void log(const String &line) {
   if (pendingFile.length() < 4096) pendingFile += stamped;
   ring += line;
   ring += '\n';
-  if (ring.length() > 3000) ring.remove(0, ring.length() - 3000);
+  if (ring.length() > 1500) ring.remove(0, ring.length() - 1500);  // the recent log (the card file has all of it)
   bool toSerial = !consoleOn && serialConnected();
   xSemaphoreGive(logMu);
   flushPending();

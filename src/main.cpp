@@ -342,7 +342,7 @@ static void osMain() {
   }
 }
 
-SET_LOOP_TASK_STACK_SIZE(20 * 1024);  // Lua C-call depth is capped (LUAI_MAXCCALLS) to fit
+SET_LOOP_TASK_STACK_SIZE(16 * 1024);  // deepest use seen ~10 KB; Lua C-call depth is capped (LUAI_MAXCCALLS) to fit
 
 void setup() {
   // No Serial.begin(): UART0 TX is GPIO43, which the ADV uses for the mic's

@@ -39,7 +39,8 @@ local np = nil                 -- info on the current track
 local state = "stopped"        -- "playing" | "paused" | "ready" (loaded, not started) | "stopped"
 local done, total, grace = 0, 0, 0
 local shuffle, rpt = false, "off"
-local hist = {}                -- shuffle history, for "previous"
+local hist = {}                -- shuffle: songs played before this one, for "previous"
+local fwd = {}                 -- shuffle: songs left by going back, replayed by "next" in order
 local vol_pct = 0              -- volume as shown: one of 20 even steps (snd.step)
 local eq_name = "Flat"         -- the equalizer preset (native, audio.eq)
 local idle, save_t = 0, 0
@@ -97,9 +98,15 @@ local function step(dir)  -- next (+1) or previous (-1) track
   local n = qcount()
   if n == 0 then return end
   if shuffle and n > 1 then
-    if dir < 0 and #hist > 0 then return play_pos(table.remove(hist)) end
+    if dir < 0 then
+      if #hist == 0 then return play_pos(q.pos) end  -- nothing earlier: start this one again
+      fwd[#fwd + 1] = q.pos
+      if #fwd > 30 then table.remove(fwd, 1) end
+      return play_pos(table.remove(hist))
+    end
     hist[#hist + 1] = q.pos
     if #hist > 30 then table.remove(hist, 1) end
+    if #fwd > 0 then return play_pos(table.remove(fwd)) end  -- back then forward: the same song
     local k
     repeat k = math.random(n) until k ~= q.pos
     return play_pos(k)
@@ -178,7 +185,7 @@ end
 
 -- Starts the list on screen at row i, queueing its tracks.
 local function play_list(i)
-  hist = {}
+  hist, fwd = {}, {}
   if L.names then
     local files, k = {}, 1
     for j, n in ipairs(L.names) do
@@ -317,7 +324,7 @@ local function menu_enter(id)
   elseif id == "scan" then start_scan()
   elseif id == "folders" then open_list(dir_list(ROOT))
   elseif id == "shuffle" then
-    shuffle, hist = true, {}
+    shuffle, hist, fwd = true, {}, {}
     q = { kind = "range", first = 1, count = lib.tracks, pos = 1 }
     play_pos(math.random(lib.tracks))
     view = "playing"
@@ -484,7 +491,7 @@ function app.key(k)
     elseif c == "a" then goto_song("albums")
     elseif c == "t" then goto_song("artists")
     elseif c == "e" then next_eq()
-    elseif c == "s" then shuffle, hist = not shuffle, {}; cfg.set("music_shuffle", shuffle and "1" or "0")
+    elseif c == "s" then shuffle, hist, fwd = not shuffle, {}, {}; cfg.set("music_shuffle", shuffle and "1" or "0")
     elseif c == "r" then
       rpt = rpt == "off" and "all" or rpt == "all" and "one" or "off"
       cfg.set("music_repeat", rpt)

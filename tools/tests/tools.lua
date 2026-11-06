@@ -100,78 +100,149 @@ check(shows("Category"), "calc remembers the Units tab")
 shell.home(); frames(2)
 
 -- ================================================================ Clock
+-- the emulator's clock is Tuesday 3 November 2026, 14:07
 cfg.set("alarms", "08:00|Standup;bad;09:15")
 launch("clock")
 check(shell.app() == "clock", "clock launches")
 check(drew("14:07") and shows("Tuesday, 3 November 2026"), "clock tab shows time and date")
-check(shows("Next alarm 08:00 Standup"), "clock tab shows the next alarm")
+check(shows("Alarm 08:00 Standup  in 17h 53m"), "clock tab shows the next alarm and how long until it")
 key("tab")
-check(shows("Standup") and drew("09:15"), "alarms are parsed from cfg (bad entry skipped)")
-key("a"); type_text("7:30 Wake up"); key("enter")
-check(cfg.get("alarms") == "07:30|Wake up;08:00|Standup;09:15|", "alarm added, sorted and written to cfg")
-key("a"); type_text("25:00 bad"); key("enter")
-check(cfg.get("alarms") == "07:30|Wake up;08:00|Standup;09:15|", "invalid time is refused")
-check(shows("HH:MM"), "invalid time explains the format")
-key("a"); type_text("6:05pm Gym;x"); key("enter")
-check(cfg.get("alarms") == "07:30|Wake up;08:00|Standup;09:15|;18:05|Gym x", "12-hour input and separators are cleaned")
+check(shows("08:00  Standup") and shows("09:15") and shows("+ New alarm") and shows("Snooze length"),
+  "alarms are listed (old format read, bad entry skipped) with New and Snooze rows")
+key("space")
+check(cfg.get("alarms") == "08:00|Standup|0d;09:15||1d", "Space turns an alarm off (saved with flags)")
+key("space")
+check(cfg.get("alarms") == "08:00|Standup|1d;09:15||1d", "and on again")
+-- new alarm in the editor
+key("a")
+check(shows("NEW ALARM") and shows("15:00"), "A opens the editor at the next hour")
+type_text("0730")
+check(shows("07:30"), "typing 0730 sets the time")
+key("p")
+check(shows("19:30"), "p makes it PM")
+key("a")
+check(shows("07:30"), "a makes it AM")
+key("right")
+check(shows("07:31"), "<> moves a minute")
+key("left")
+key("down"); key("enter"); type_text("Wake up"); key("enter")
+check(shows("Wake up"), "the label is typed in a prompt")
+key("down"); key("right")
+check(shows("Weekdays"), "<> on Repeat changes the days")
+key("down"); key("enter")
+check(cfg.get("alarms") == "07:30|Wake up|1w;08:00|Standup|1d;09:15||1d", "Add alarm saves it, sorted, with its days")
+check(shows("Alarm set for 07:30 (Weekdays)"), "and says so")
+key("a"); type_text("2500")
+check(shows("Use 24-hour HHMM"), "an impossible time is refused with a hint")
+key("esc")
+check(not shows("NEW ALARM") and cfg.get("alarms") == "07:30|Wake up|1w;08:00|Standup|1d;09:15||1d", "Esc cancels the editor")
+key("a"); type_text("0800"); key("down"); key("enter"); type_text("Standup"); key("enter")
+key("down"); key("down"); key("enter")
+check(shows("already exists"), "a duplicate is refused")
+key("esc")
+-- edit, delete
 for _ = 1, 5 do key("up") end
-key("x")
-check(cfg.get("alarms") == "08:00|Standup;09:15|;18:05|Gym x", "X deletes the selected alarm")
-key("x"); key("x"); key("x")
-check(cfg.get("alarms") == nil, "deleting every alarm clears cfg")
-check(shows("No alarms"), "empty alarm list")
--- timer
-key("tab")
-local before = #shell.timers
-key("right"); key("right")
-check(shows("7 min"), "right raises the minutes")
 key("enter")
-check(#shell.timers == before + 1 and shell.timers[#shell.timers].total == 420
-  and shell.timers[#shell.timers].label == "Timer", "Enter starts a 7 minute timer")
-type_text("10"); key("enter")
-check(#shell.timers == before + 2 and shell.timers[#shell.timers].total == 600, "typed digits set 10 minutes")
-frames(10)
-check(drew("Timer") and drew("10:00") and drew("07:00"), "running timers are listed with time left")
+check(shows("EDIT ALARM") and shows("07:30"), "Enter edits the selected alarm")
+key("left"); key("enter")
+check(cfg.get("alarms") == "07:29|Wake up|1w;08:00|Standup|1d;09:15||1d", "Enter on the time saves the change")
 key("x")
-check(#shell.timers == before + 1, "X cancels the selected timer")
+check(cfg.get("alarms") == "08:00|Standup|1d;09:15||1d", "X deletes the selected alarm")
+-- snooze length
+for _ = 1, 5 do key("down") end
+key("right")
+check(cfg.get("snooze") == "2" and shows("2 min"), "<> on Snooze length sets it")
+-- an alarm rings at its minute; a weekend one doesn't on a Tuesday
+cfg.set("alarms", "14:08|Test|1d;14:08|Weekend|1e")
+local real_now = clock.now
+clock.now = function() local t = real_now(); t.m = 8; return t end
+frames(40)
+check(shell.ringing and shell.ringing.title == "14:08" and shell.ringing.label == "Test", "an alarm rings at its time")
+shell.ring_end(true)
+check(shell.snooze == "+2 min", "snoozing uses the snooze length")
+shell.snooze = nil
+clock.now = real_now
+cfg.set("alarms", nil)
+-- timer
+launch("clock")
+key("tab")
+check(drew("05:00"), "timer starts at the 5 minute preset")
+key("right")
+check(drew("10:00"), "<> picks the next preset")
+key("enter")
+local before = #shell.timers
+check(shell.timers[#shell.timers].total == 600 and shell.timers[#shell.timers].label == "10 min timer",
+  "Enter starts it")
+type_text("7"); key("enter")
+check(#shell.timers == before + 1 and shell.timers[#shell.timers].total == 420, "typed minutes start a 7 minute timer")
+frames(10)
+check(shows("10 min timer") and shows("7 min timer"), "running timers are listed")
+key("space")
+check(shell.timers[#shell.timers].paused and shows("(paused)"), "Space pauses the selected timer")
+key("space")
+check(not shell.timers[#shell.timers].paused, "and resumes it")
+key("up"); key("x")
+check(#shell.timers == before and shell.timers[#shell.timers].total == 420, "X cancels the selected timer")
+shell.timers[#shell.timers].left = 0.01
+frames(3)
+check(shell.ringing and shell.ringing.title == "7 min timer done", "a finished timer rings")
+shell.ring_end(false)
 -- stopwatch
 key("tab")
 check(drew("00:00.00"), "stopwatch starts at zero")
 key("enter"); frames(10)
 key("l"); frames(5)
+key("l"); frames(20)
 key("l")
 key("enter")
-check(shows("Lap 1") and shows("Lap 2"), "laps are listed")
+check(shows("Lap 1") and shows("Lap 3"), "laps are listed")
 check(not drew("00:00.00"), "stopwatch counted time")
 key("r")
 check(drew("00:00.00") and not shows("Lap 1"), "R resets")
--- pomodoro
+-- study
 key("tab")
-check(shows("25 min focus"), "pomodoro idle screen")
+check(shows("Start focus") and shows("25 / 5 min") and shows("every 4, 15m"), "study shows its plan")
 key("enter")
 local pomo
 for _, t in ipairs(shell.timers) do if t.pomo then pomo = t end end
-check(pomo and pomo.total == 1500 and pomo.pomo == "work", "Enter starts a 25 min focus timer")
+check(pomo and pomo.total == 1500 and pomo.pomo == "work" and pomo.every == 4 and pomo.long == 900,
+  "Enter starts 25 min of focus with a long break every 4")
 frames(3)
-check(shows("FOCUS") and drew("25:00"), "pomodoro shows phase and time left")
--- leave the app: timers keep running in the shell
+check(shows("FOCUS") and drew("25:00") and shows("Session 1 of 4"), "focus shows the phase, time and session")
+key("space")
+check(pomo.paused and shows("Resume"), "Space pauses the session")
+key("space")
+key("s"); frames(3)
+for _, t in ipairs(shell.timers) do if t.pomo then pomo = t end end
+check(pomo.pomo == "break" and pomo.total == 300 and shows("BREAK"), "S skips to the break")
+check(cfg.get("study_min") == "25" and cfg.get("study_n") == "1" and shows("Today 25m  1 session"),
+  "a finished focus phase counts in today's stats")
+for _ = 1, 3 do  -- break, focus, ... until the 4th focus phase ends
+  key("s"); frames(2)
+  key("s"); frames(2)
+end
+frames(10)  -- the screen refreshes every 0.25 s
+for _, t in ipairs(shell.timers) do if t.pomo then pomo = t end end
+check(pomo.pomo == "long" and pomo.total == 900 and shows("LONG BREAK"), "after 4 sessions comes a long break")
+check(shows("Today 1h 40m  4 sessions"), "four sessions: 1h 40m")
+-- leave the app: the cycle keeps going in the shell
 shell.home(); frames(2)
-pomo.left = 0.01
-frames(2)
-local nxt
-for _, t in ipairs(shell.timers) do if t.pomo then nxt = t end end
-check(nxt and nxt ~= pomo and nxt.pomo == "break" and nxt.total == 300 and nxt.count == 1,
-  "work phase ends with the app closed and starts a 5 min break")
-nxt.left = 0.01; frames(2)
-for _, t in ipairs(shell.timers) do if t.pomo then nxt = t end end
-check(nxt.pomo == "work" and nxt.count == 1, "break ends and the next focus phase starts")
+shell.finish_timer(pomo); frames(2)
+for _, t in ipairs(shell.timers) do if t.pomo then pomo = t end end
+check(pomo.pomo == "work", "with the app closed the long break ends and focus starts again")
 launch("clock")
-check(shows("FOCUS") and shows("Completed: 1"), "clock reopens on the Pomodoro tab with the count")
+check(shows("FOCUS"), "the clock reopens on the running session")
 key("x")
 local still = false
 for _, t in ipairs(shell.timers) do if t.pomo then still = true end end
-check(not still, "X stops the Pomodoro")
-check(#shell.timers == before + 1, "the plain timer is still running")
+check(not still and shows("Start focus"), "X stops the session")
+key("down"); key("right")
+check(shows("50 / 10 min") and cfg.get("study_plan") == "2", "<> changes the plan")
+key("down"); key("down"); key("enter"); type_text("Biology"); key("enter")
+check(cfg.get("study_task") == "Biology" and shows("Biology"), "the task is typed in a prompt")
+key("down"); key("enter")
+check(cfg.get("study_quiet") == "1" and shows("Quiet focus on"), "Quiet focus turns on")
+key("enter")
 for i = #shell.timers, 1, -1 do shell.cancel_timer(shell.timers[i]) end
 no_error("clock")
 key("esc")

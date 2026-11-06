@@ -15,6 +15,7 @@ lua_State *L = nullptr;
 String lastError;
 
 static size_t used = 0;
+static uint32_t gen = 0;  // which VM (open() counts them), for logging once per VM
 // Lua gets its own contiguous arena, reserved at boot before Wi-Fi starts, so
 // Wi-Fi's churn of small buffers can never fragment it. Without an arena
 // (reservation failed) it falls back to the system heap with a reserve.
@@ -52,7 +53,7 @@ void arenaReturn(void *p) {
 // Native buffers that should not fail for want of one contiguous block (the
 // MP3 decoder's ~38 KB): from the heap, else from the arena while it has room
 // to spare beyond what the open app may still need.
-static const size_t ARENA_SPARE = 12 * 1024;
+static const size_t ARENA_SPARE = 6 * 1024;  // Music keeps ~22 KB of the arena free; 12 KB left too little to borrow
 void *audioAlloc(size_t n) {
   void *p = heap_caps_malloc(n, MALLOC_CAP_8BIT);
   if (p || !arena || multi_heap_free_size(arena) < n + ARENA_SPARE) return p;
@@ -90,6 +91,18 @@ static void *alloc(void *, void *ptr, size_t osize, size_t nsize) {
     if (used + grow > MEM_LIMIT) return nullptr;
     if (heap_caps_get_free_size(MALLOC_CAP_8BIT) < grow + HEAP_RESERVE) return nullptr;
   }
+  struct FailLog {  // the first failed allocation of each VM, with the memory picture
+    static void note(size_t n, bool small) {
+      static uint32_t lastGen = ~0u;
+      if (lastGen == gen) return;
+      lastGen = gen;
+      multi_heap_info_t a{};
+      if (arena) multi_heap_get_info(arena, &a);
+      usbdev::log(String("lua alloc failed: ") + n + " bytes (" + (small ? "pool page" : "block") + "), used " + used +
+                  ", arena free " + a.total_free_bytes + " largest " + a.largest_free_block + ", pool " +
+                  luapool::pageBytes() + ", heap largest " + heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    }
+  };
   bool oldSmall = ptr && osize <= luapool::MAX_SMALL;
   bool newSmall = nsize <= luapool::MAX_SMALL;
   void *p;
@@ -107,6 +120,7 @@ static void *alloc(void *, void *ptr, size_t osize, size_t nsize) {
     }
   }
   if (p) used = used - osize + nsize;
+  else FailLog::note(nsize, nsize <= luapool::MAX_SMALL);
   return p;
 }
 
@@ -133,6 +147,7 @@ bool call(int nargs, int nresults) {
 bool open() {
   close();
   used = 0;
+  gen++;
   L = lua_newstate(alloc, nullptr);
   if (!L) { lastError = "not enough memory"; return false; }
   luaL_requiref(L, "_G", luaopen_base, 1);
