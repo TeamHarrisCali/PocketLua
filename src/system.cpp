@@ -137,6 +137,8 @@ static void notify(const String &title, const String &body = "", const char *snd
   toast(title, 3);
   sound(snd);
 }
+// for native services (meshsvc.cpp); "none" as the sound is a silent one
+void systemNotify(const String &title, const String &body, const char *snd) { notify(title, body, snd); }
 
 // ================================================================ dialogs
 enum DlgKind { DLG_NONE, DLG_ALERT, DLG_CONFIRM, DLG_PROMPT, DLG_MENU };
@@ -1635,7 +1637,20 @@ static void conLine(String line) {
     else if (cmd == "run") { launch(arg); reply("ok"); }
     else if (cmd == "ls") { for (auto &e : store::list(arg)) reply(String(e.dir ? "d " : "- ") + e.name); }
     else if (cmd == "log") {
-      String r = usbdev::logDump();
+      // the last ~6 KB of data/log.txt (whole lines), so a busy session doesn't
+      // scroll out of the 1.5 KB ring; "!log ring" (or no card) shows the ring
+      String r, real;
+      fs::FS *fs = arg == "ring" ? nullptr : store::resolve("data/log.txt", real);
+      File f = fs ? fs->open(real) : File();
+      if (f) {
+        size_t size = f.size(), from = size > 6000 ? size - 6000 : 0;
+        f.seek(from);
+        r = f.readString();
+        f.close();
+        if (from > 0) r = r.substring(r.indexOf('\n') + 1);
+      } else {
+        r = usbdev::logDump();
+      }
       int s = 0;
       while (s < (int)r.length()) { int e = r.indexOf('\n', s); if (e < 0) e = r.length(); reply("# " + r.substring(s, e)); s = e + 1; }
     } else reply("error: unknown command");

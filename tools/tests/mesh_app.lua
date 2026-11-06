@@ -129,6 +129,10 @@ check(shows("ALB") and shows("Contacts") == nil, "Esc in a conversation goes bac
 key("enter"); frames(2)
 check(shows("hi alice"), "Enter on a contact reopens the conversation")
 key("tab"); frames(2)
+check(shows("Listen when closed"), "Setup has the background listener switch")
+for _ = 1, 6 do key("down") end
+frames(1)
+check(shows("DMs from new people"), "Setup has the DM sound row")
 check(shows("Channel 1") and shows("public"), "Setup lists the public channel")
 
 shell.launch("calc"); frames(3)
@@ -136,6 +140,46 @@ shell.launch("mesh"); frames(3)
 check(shows("ALB: hello mesh"), "chat history is back after reopening")
 key("tab"); key("tab"); frames(2)
 check(shows("hi alice"), "the DMs tab reopens the last conversation")
+local ME2 = ME
+
+-- radar: Alice shares a position about 1.4 km NE of our GPS fix (37.77, -122.42)
+hear(ALICE, { portnum = mt.PORT.POSITION, payload = mt.encode_position({ lat = 37.78, lon = -122.41 }) })
+key("tab", { shift = true }); frames(2)
+key("r"); secs(1.2)
+check(shows("ALB 1.4km NE"), "the radar picks Alice with distance and direction")
+key("r"); frames(1)
+
+-- quiet: M in the contact list silences a contact
+key("tab"); frames(2)
+key("esc"); frames(2)
+local snd0, dings = shell.sound, 0
+shell.sound = function(k, ...) if k == "notify" then dings = dings + 1 end return snd0(k, ...) end
+local function dm_from(from, text)  -- PKI with the stand-in crypto: Data, tag, extra nonce
+  local h = { to = ME2, from = from, id = mt.new_id(), hop_limit = 3, hop_start = 3, channel = 0 }
+  queue[#queue + 1] = { data = mt.pack(h, mt.encode_data({ portnum = 1, payload = text }) .. string.rep("\0", 12)),
+    rssi = -70, snr = 6 }
+  frames(2)
+end
+key("m"); frames(2)
+check(shows("quiet"), "M marks the contact quiet")
+dings = 0
+dm_from(ALICE, "psst")
+check(dings == 0, "a quiet contact's DM makes no sound")
+key("m"); frames(1)
+dm_from(ALICE, "again")
+check(dings == 1, "with sound back on it dings")
+shell.sound = snd0
+
+-- the background listener's inbox is filed when Mesh opens
+shell.launch("calc"); frames(3)
+local function hx(s) return (s:gsub(".", function(c) return string.format("%02x", c:byte()) end)) end
+local h = { to = ME2, from = 0x0badf00d, id = 0x1234, hop_limit = 3, hop_start = 3, channel = 0x08 }
+sys.mkdirs("data/mesh")
+sys.write_text("data/mesh/inbox.txt", "-90 4.5 " .. hx(mt.pack(h, mt.encode_data({ portnum = 1, payload = "while you were out" }))) .. "\n")
+shell.launch("mesh"); frames(3)
+check(sys.read_text("data/mesh/inbox.txt") == "", "the inbox is emptied when Mesh opens")
+key("tab"); key("tab"); frames(2)
+check(shows("!f00d"), "a DM kept while closed shows in the contact list")
 shell.launch("calc"); frames(3)
 
 say(string.format("%d failure(s)", fails))

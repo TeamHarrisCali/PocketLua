@@ -301,6 +301,7 @@ static void osMain() {
   store::safeMode = safe;
   vm::reserveArena();  // before Wi-Fi can fragment the heap
   shell::begin(safe);
+  if (!safe) meshsvcBegin();  // the Mesh background listener's on/off default
   logHeap(safe ? "booted (safe)" : "booted");
 
   uint32_t last = millis(), lastHeapLog = 0;
@@ -315,6 +316,8 @@ static void osMain() {
     settingsTick();
     g_crumb = "hw tick";
     hwTick();
+    g_crumb = "mesh listener";
+    meshsvcTick();
     markFirmwareGood();
     if (millis() - lastHeapLog > 30000) {
       lastHeapLog = millis();

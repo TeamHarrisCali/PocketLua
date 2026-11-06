@@ -1,6 +1,7 @@
--- Mesh > Setup: names, preset, position sharing and private channels (add
--- with a new or pasted key, show the key to share, remove). Loaded while the
--- tab is open (see apps/mesh.lua for S).
+-- Mesh > Setup: names, preset, position sharing, listening while closed,
+-- which messages make a sound, and private channels (add with a new or pasted
+-- key, show the key to share, quiet, remove). Loaded while the tab is open
+-- (see apps/mesh.lua for S).
 return function(S)
 local col = ui.col
 local POS_MODES = { "Off", "Approx", "Precise" }
@@ -48,9 +49,13 @@ local function build()
     { label = "Short name", value = S.short_name },
     { label = "Preset", value = S.preset and S.preset.name or "?" },
     { label = "Share position", value = POS_MODES[S.pos_mode] },
+    { label = "Listen when closed", value = cfg.get("mesh_bg") == "1" and "On" or "Off", bg = true },
+    { label = "DMs from new people", value = cfg.get("mesh_dm_new") == "0" and "Quiet" or "Sound", dmnew = true },
   }
   for i = 1, #S.channels do
-    rows[#rows + 1] = { label = "Channel " .. i, value = S.chan_name(i) .. (i == 1 and " (public)" or ""), ch = i }
+    local quiet = S.listed("mesh_mute_ch", S.chan_name(i))
+    rows[#rows + 1] = { label = "Channel " .. i, value = S.chan_name(i) .. (i == 1 and " (public)" or ""), ch = i,
+      badge = quiet and "Q" or nil }
   end
   if #S.channels < 8 then rows[#rows + 1] = { label = "+ Add private channel", add = true } end
   rows[#rows + 1] = { label = "Node", value = S.mt.id_text(S.me), dim = true }
@@ -79,9 +84,19 @@ local function add_channel()
 end
 
 local function channel_menu(i)
-  if i == 1 then shell.toast("The public channel: Preset changes it"); return end
+  local name = S.chan_name(i)
+  local function sound()
+    shell.toast(name .. (S.toggle("mesh_mute_ch", name) and ": quiet" or ": sound on"))
+    build()
+  end
+  if i == 1 then
+    shell.menu(name .. " (public)", { "Sound on/off" }, function(a) if a == 1 then sound() end end)
+    return
+  end
   local c = S.channels[i]
-  shell.menu(c.name, { "Show key", "Remove" }, function(a)
+  shell.menu(c.name, { "Show key", "Sound on/off", "Remove" }, function(a)
+    if a == 2 then sound(); return end
+    if a == 3 then a = 2 end
     if a == 1 then
       shell.alert(c.name, "Key: " .. b64encode(c.psk) .. "  (name " .. c.name .. ")")
     elseif a == 2 then
@@ -115,6 +130,14 @@ local function change(r, d)
     S.position_soon()
     shell.toast(S.pos_mode == 1 and "Position not shared" or S.pos_mode == 2 and "Sharing an approximate position (~5 km)"
       or "Sharing your exact position", 2)
+  elseif r.bg then
+    local on = cfg.get("mesh_bg") ~= "1"
+    cfg.set("mesh_bg", on and "1" or "0")
+    shell.toast(on and "Mesh listens for DMs while closed" or "Mesh listens only while open", 2)
+  elseif r.dmnew then
+    local quiet = cfg.get("mesh_dm_new") ~= "0"
+    cfg.set("mesh_dm_new", quiet and "0" or nil)
+    shell.toast(quiet and "DMs from new people: quiet" or "DMs from new people: sound", 2)
   elseif r.ch then channel_menu(r.ch)
   elseif r.add then add_channel()
   end

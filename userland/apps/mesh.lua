@@ -15,8 +15,9 @@ app.help = {
   { "Up/Dn", "Scroll / pick" },
   { "T", "Node: traceroute" },
   { "X", "DMs: remove contact" },
+  { "M", "DMs: quiet contact" },
+  { "R", "Nodes: radar" },
   { "Esc", "Clear, then back" },
-  { "R", "Retry radio" },
 }
 
 local mt = require("meshtastic")
@@ -120,13 +121,34 @@ function S.is_contact(hx)
   return false
 end
 
+-- ---------------------------------------------------------------- quiet
+-- cfg mesh_mute_ch (channel names) and mesh_mute_dm (node hexes) are comma
+-- lists; mesh_dm_new = "0" keeps DMs from people not in the list quiet. The
+-- background listener (meshsvc.cpp) reads the same settings.
+function S.listed(key, item) return ("," .. (cfg.get(key) or "") .. ","):find("," .. item .. ",", 1, true) ~= nil end
+function S.toggle(key, item)
+  local out, found = {}, false
+  for v in (cfg.get(key) or ""):gmatch("[^,]+") do
+    if v == item then found = true else out[#out + 1] = v end
+  end
+  if not found then out[#out + 1] = item end
+  cfg.set(key, #out > 0 and table.concat(out, ",") or nil)
+  return not found
+end
+local function dm_quiet(hx)
+  return S.listed("mesh_mute_dm", hx) or (not S.is_contact(hx) and cfg.get("mesh_dm_new") == "0")
+end
+local importing = false
+local function ding(quiet) if not quiet and not importing then shell.sound("notify") end end
+
 local function build_contacts()
   crows = {}
   for i, hx in ipairs(S.contacts) do
     local n = S.nodes[hx]
-    crows[i] = { label = ui.fit(S.name_of(hx) .. "  " .. (n and n.long or ""), 150), dim = not (n and n.seen),
-      value = n and n.seen and "nearby" or "", badge = S.unread[hx] and tostring(S.unread[hx]) or nil,
-      badge_color = ui.accents.orange }
+    local quiet = S.listed("mesh_mute_dm", hx)
+    crows[i] = { label = ui.fit(S.name_of(hx) .. "  " .. (n and n.long or ""), 140), dim = not (n and n.seen),
+      value = (quiet and "quiet " or "") .. (n and n.seen and "nearby" or ""),
+      badge = S.unread[hx] and tostring(S.unread[hx]) or nil, badge_color = ui.accents.orange }
   end
   csel = math.max(1, math.min(csel, #crows))
 end
@@ -304,12 +326,13 @@ local function on_data(h, d, n, hx, ci)
     if bcast and ci then
       add(S.chat_lines(ci), chat_file(ci), S.name_of(hx) .. ": " .. text, "them")
       if not (tab == 1 and S.chan_sel == ci) then S.unread_chat = (S.unread_chat or 0) + 1 end
-      shell.sound("notify")
+      ding(S.listed("mesh_mute_ch", S.chan_name(ci)))
     elseif to_me then
+      local quiet = dm_quiet(hx)
       touch(hx)
       add(S.dm_lines(hx), dm_file(hx), S.name_of(hx) .. ": " .. text, "them")
       if not (tab == 3 and S.peer == hx) then S.unread[hx] = (S.unread[hx] or 0) + 1 end
-      shell.sound("notify")
+      ding(quiet)
     end
     if to_me and h.want_ack then send_ack(h, ci or 1, h.id) end
   elseif p == mt.PORT.NODEINFO then
@@ -470,6 +493,16 @@ function app.init()
   if last and S.is_contact(last) then S.peer = last end  -- the DMs tab opens where you left it
   S.start_radio()
   if gps then pcall(gps.start) end
+  -- what the background listener kept while Mesh was closed (meshsvc.cpp)
+  local inbox = sys.read_text(DIR .. "/inbox.txt")
+  if inbox and inbox ~= "" then
+    sys.write_text(DIR .. "/inbox.txt", "")
+    importing = true
+    for rssi, snr, hx in inbox:gmatch("(%-?%d+) (%-?[%d.]+) (%x+)") do
+      on_packet({ data = S.unhex(hx), rssi = tonumber(rssi), snr = tonumber(snr) })
+    end
+    importing = false
+  end
 end
 
 function app.update(dt)
@@ -567,7 +600,7 @@ function app.draw()
   elseif not S.peer then
     if #crows == 0 then ui.empty("antenna", "No conversations yet", "Pick a node in Nodes, Enter")
     else ctop = ui.list(crows, csel, ctop, 4, 33, 229, 15, 6) end
-    ui.footer(#crows > 0 and { { "Enter", "Open" }, { "X", "Remove" }, { "Tab", "Setup" } }
+    ui.footer(#crows > 0 and { { "Enter", "Open" }, { "M", "Quiet" }, { "X", "Remove" } }
       or { { "Tab", "Setup" }, { "Esc", "Back" } })
   else
     draw_lines(S.dm_lines(S.peer), S.name_of(S.peer))
@@ -602,7 +635,7 @@ function app.key(k)
   local d = ui.nav(k)
   if tabmod then return tabmod.key(k, d) end
   if not S.radio_ok then
-    if k.text and k.text:lower() == "r" and not k.fn then
+    if k.text and k.text:lower() == "r" and not k.fn and tab ~= 2 then
       S.start_radio()
       shell.toast(S.radio_ok and "Radio ready" or tostring(S.radio_err))
       return true
@@ -616,6 +649,9 @@ function app.key(k)
       if d == "up" then csel = math.max(1, csel - 1)
       elseif d == "down" then csel = math.min(#crows, csel + 1)
       elseif k.key == "enter" and hx then S.open_dm(hx)
+      elseif c == "m" and hx then
+        shell.toast(S.name_of(hx) .. (S.toggle("mesh_mute_dm", hx) and ": quiet" or ": sound on"))
+        build_contacts()
       elseif c == "x" and hx then
         shell.confirm("Remove " .. S.name_of(hx) .. "?", "From the list; the messages stay on the card.", function(yes)
           if yes then table.remove(S.contacts, csel); save_contacts(); build_contacts() end
