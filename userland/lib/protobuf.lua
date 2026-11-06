@@ -114,6 +114,30 @@ function pb.s32(v)
   return v
 end
 
+-- A decoded fixed32 read as a float (Meshtastic's float fields).
+function pb.float(v)
+  if v == nil then return nil end
+  return (string.unpack("<f", string.pack("<I4", v & M32)))
+end
+
+-- A packed repeated field (a length-delimited string) as a list: "fixed32"
+-- gives 32-bit values, anything else varints (low 32 bits).
+function pb.packed(s, kind)
+  local out = {}
+  if type(s) ~= "string" then return out end
+  if kind == "fixed32" then
+    for i = 1, #s - 3, 4 do out[#out + 1] = string.unpack("<I4", s, i) & M32 end
+    return out
+  end
+  local v, shift = 0, 0
+  for i = 1, #s do
+    local b = byte(s, i)
+    if shift < 32 then v = v | ((b & 0x7F) << shift) end
+    if b < 0x80 then out[#out + 1], v, shift = v & M32, 0, 0 else shift = shift + 7 end
+  end
+  return out
+end
+
 -- A 32-bit value as 8 hex digits, the way Meshtastic writes node ids.
 function pb.hex32(v) return string.format("%08x", v & M32) end
 

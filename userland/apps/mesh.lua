@@ -1,68 +1,486 @@
 -- Mesh: a Meshtastic-compatible node on the Cap LoRa-1262. Chat on the public
--- channel, see the nodes around, send private (public-key) messages and share
--- a position. It joins as CLIENT_MUTE: it never relays other nodes' packets.
--- The radio only runs while the app is open. Protocol: lib/meshtastic.lua and
--- docs/MESHTASTIC.md.
+-- channel and private channels, see the nodes around (battery, position,
+-- traceroute), send private (public-key) messages and share a position.
+-- It joins as CLIENT_MUTE: it never relays other nodes' packets. The radio only
+-- runs while the app is open, and Wi-Fi is off meanwhile (focus mode) for the
+-- memory. Chats are kept in data/mesh. The Nodes and Setup
+-- tabs live in lib/mesh/ and load while open (all of it at once doesn't fit).
+-- Protocol: lib/meshtastic.lua and docs/MESHTASTIC.md.
 local col = ui.col
 local app = { title = "Mesh", icon = "antenna", color = "green", order = 52, category = "net" }
 app.help = {
   { "Tab", "Next tab" },
   { "Enter", "Send / open / change" },
+  { "<>", "Chat: channel" },
   { "Up/Dn", "Scroll / pick" },
-  { "<>", "Setup: change value" },
+  { "T", "Node: traceroute" },
   { "Esc", "Clear, then back" },
   { "R", "Retry radio" },
 }
 
 local mt = require("meshtastic")
 local pb = require("protobuf")
-local geo = require("geo_math")
 
 local TABS = { "Chat", "Nodes", "DMs", "Setup" }
-local DIR, NODES_FILE = "data/mesh", "data/mesh/nodes.txt"
-local MAX_LINES, MAX_NODES, ROWS = 40, 40, 7
-local POS_MODES = { "Off", "Approx", "Precise" }  -- precision bits nil / 13 / 32
+local DIR = "data/mesh"
+local MAX_LINES, MAX_NODES, KEEP, ROWS = 40, 40, 40, 7
 local NODEINFO_EVERY, POS_EVERY = 3 * 3600, 15 * 60
 
-local tab = 1
-local radio_ok, radio_err = false, nil
-local me, me_hex, priv, pub = 0, "", nil, nil
-local long_name, short_name, preset_i, pos_mode = "", "", 1, 1
-local preset, freq, chan_name, chan_key, chan_hash = nil, 0, "", nil, 0
+-- S is what the tab modules share with the core
+local S = { mt = mt, pb = pb, nodes = {}, channels = {}, chat = {}, dms = {}, unread = {}, chan_sel = 1,
+  now = 0, tx = 0, rx = 0, pos_mode = 1, preset_i = 1, radio_ok = false }
+local tab, tabmod = 1, nil
 local hist = mt.history(120)
-local nodes = {}             -- hex -> { num, long, short, pub, key, rssi, snr, hops, seen, lat, lon, info_at }
 local nodes_dirty = false
-local chat, dms = {}, {}     -- chat lines; dms[hex] = lines. A line: { text, kind }
 local scroll, input, blink = 0, "", true
-local peer = nil             -- hex of the node the DMs tab talks to
-local queue = {}             -- frames waiting for the radio: { frame, at, tries, id, line }
-local waiting = {}           -- our DMs waiting for an ACK: id hex -> { line, tries, frame, at }
-local rows, rsel, rtop = {}, 1, 1
-local srows, ssel, stop_ = {}, 1, 1
-local fix = nil
-local now, gps_left, rows_left, info_left, pos_left = 0, 0, 0, 5, 60
-local tx, rx, unread = 0, 0, 0
+local queue, waiting, traces = {}, {}, {}
+local gps_left, info_left, pos_left, save_left = 0, 5, 60, 30
 
 -- ---------------------------------------------------------------- helpers
-local function hex(s) return (s:gsub(".", function(c) return string.format("%02x", c:byte()) end)) end
-local function unhex(s) return (s:gsub("%x%x", function(h) return string.char(tonumber(h, 16)) end)) end
-
-local function clean(s)  -- UTF-8 (emoji) to "?", no control characters
+function S.hex(s) return (s:gsub(".", function(c) return string.format("%02x", c:byte()) end)) end
+function S.unhex(s) return (s:gsub("%x%x", function(h) return string.char(tonumber(h, 16)) end)) end
+function S.clean(s)  -- UTF-8 (emoji) to "?", no control characters
   return (s:gsub("[\xC0-\xFF][\x80-\xBF]*", "?"):gsub("[^\32-\126]", ""))
 end
 
-local function name_of(hx)
-  local n = nodes[hx]
+function S.name_of(hx)
+  local n = S.nodes[hx]
   if n and n.short and n.short ~= "" then return n.short end
   if n and n.long and n.long ~= "" then return n.long end
   return "!" .. hx:sub(-4)
 end
 
-local function add(list, text, kind)
+function S.chan_name(i)
+  local c = S.channels[i]
+  return c and (c.name ~= "" and c.name or (S.preset and S.preset.name or "?")) or "?"
+end
+
+-- ---------------------------------------------------------------- history
+-- One file per conversation, a line per message: kind TAB text.
+local function chat_file(i) return DIR .. "/ch_" .. S.chan_name(i):gsub("[^%w%-_]", "_") .. ".txt" end
+local function dm_file(hx) return DIR .. "/dm_" .. hx .. ".txt" end
+
+local function push(list, text, kind)
   for _, l in ipairs(ui.wrap(text, 228)) do list[#list + 1] = { l, kind } end
   while #list > MAX_LINES do table.remove(list, 1) end
-  scroll = 0
   return list[#list]
+end
+
+local function load_history(file)
+  local entries = {}
+  for line in (sys.read_text(file) or ""):gmatch("[^\n]+") do entries[#entries + 1] = line end
+  local list = {}
+  for i = math.max(1, #entries - KEEP + 1), #entries do
+    local kind, text = entries[i]:match("^(%a+)\t(.*)$")
+    if kind then push(list, text, kind) end
+  end
+  if #entries > KEEP + 20 then  -- keep the file short
+    sys.write_text(file, table.concat(entries, "\n", #entries - KEEP + 1) .. "\n")
+  end
+  return list
+end
+
+-- add a message to a conversation (and its file); returns its last line
+local function add(list, file, text, kind)
+  if file and kind ~= "sys" then
+    sys.mkdirs(DIR)
+    sys.append_text(file, kind .. "\t" .. text .. "\n")
+  end
+  scroll = 0
+  return push(list, text, kind)
+end
+
+function S.chat_lines(i)
+  if not S.chat[i] then S.chat[i] = load_history(chat_file(i)) end
+  return S.chat[i]
+end
+function S.dm_lines(hx)
+  if not S.dms[hx] then S.dms[hx] = load_history(dm_file(hx)) end
+  return S.dms[hx]
+end
+
+-- ---------------------------------------------------------------- nodes
+local function save_nodes()
+  if not nodes_dirty then return end
+  local out = {}
+  for hx, n in pairs(S.nodes) do
+    out[#out + 1] = table.concat({ hx, (n.long or ""):gsub("[|\n]", " "), (n.short or ""):gsub("[|\n]", " "),
+      n.pub and S.hex(n.pub) or "" }, "|") .. "\n"
+  end
+  sys.mkdirs(DIR)
+  sys.write_text(DIR .. "/nodes.txt", table.concat(out))
+  nodes_dirty = false
+end
+
+local function load_nodes()
+  for line in (sys.read_text(DIR .. "/nodes.txt") or ""):gmatch("[^\n]+") do
+    local hx, l, s, k = line:match("^(%x+)|([^|]*)|([^|]*)|(%x*)$")
+    if hx then S.nodes[hx] = { num = tonumber(hx, 16), long = l, short = s, pub = #k == 64 and S.unhex(k) or nil } end
+  end
+end
+
+local function node(num)
+  local hx = pb.hex32(num)
+  local n = S.nodes[hx]
+  if not n then
+    local count, old, old_seen = 0, nil, math.huge
+    for k, v in pairs(S.nodes) do
+      count = count + 1
+      if (v.seen or -1) < old_seen and k ~= S.peer then old, old_seen = k, v.seen or -1 end
+    end
+    if count >= MAX_NODES and old then S.nodes[old] = nil end
+    n = { num = num }
+    S.nodes[hx] = n
+  end
+  return n, hx
+end
+
+-- ---------------------------------------------------------------- channels
+-- channel 1 is the preset's public channel; the rest are private, saved as
+-- name|hex key in data/mesh/channels.txt
+local function set_channel(i, name, psk)
+  local key = mt.expand_psk(psk)
+  S.channels[i] = { name = name, psk = psk, key = key,
+    hash = mt.channel_hash(name ~= "" and name or S.preset.name, key) }
+end
+
+function S.save_channels()
+  local out = {}
+  for i = 2, #S.channels do out[#out + 1] = S.channels[i].name .. "|" .. S.hex(S.channels[i].psk) .. "\n" end
+  sys.mkdirs(DIR)
+  sys.write_text(DIR .. "/channels.txt", table.concat(out))
+end
+
+function S.add_channel(name, psk)
+  set_channel(#S.channels + 1, name, psk)
+  S.save_channels()
+end
+
+function S.remove_channel(i)
+  if i < 2 or i > #S.channels then return end
+  table.remove(S.channels, i)
+  table.remove(S.chat, i)
+  S.chan_sel = math.min(S.chan_sel, #S.channels)
+  S.save_channels()
+end
+
+local function load_channels()
+  set_channel(1, "", "\1")
+  for line in (sys.read_text(DIR .. "/channels.txt") or ""):gmatch("[^\n]+") do
+    local name, k = line:match("^([^|]+)|(%x+)$")
+    if name and #S.channels < 8 then set_channel(#S.channels + 1, name, S.unhex(k)) end
+  end
+end
+
+-- ---------------------------------------------------------------- sending
+local function header(to, want_ack, hop_limit, channel)
+  return { to = to, from = S.me, id = mt.new_id(), hop_limit = hop_limit or 3, hop_start = hop_limit or 3,
+    want_ack = want_ack, channel = channel, relay = mt.last_byte(S.me) }
+end
+
+local function enqueue(h, payload)
+  hist.check(S.me, h.id)
+  local q = { frame = mt.pack(h, payload), at = S.now + 0.05 + math.random() * 0.25 }
+  queue[#queue + 1] = q
+  return q
+end
+
+-- on channel ci's key (1 = public): broadcasts, NodeInfo, positions, ACKs
+function S.send_channel(ci, to, data, want_ack, hop_limit)
+  local c = S.channels[ci or 1]
+  local h = header(to, want_ack and not mt.same(to, mt.BROADCAST), hop_limit, c.hash)
+  enqueue(h, mt.channel_crypt(c.key, S.me, h.id, mt.encode_data(data)))
+  return h.id
+end
+
+local function my_user()
+  return mt.encode_user({ id = mt.id_text(S.me), long_name = S.long_name, short_name = S.short_name,
+    hw_model = mt.HW_PRIVATE, role = mt.ROLE_CLIENT_MUTE, public_key = S.pub })
+end
+
+function S.send_nodeinfo(to, want_response)
+  S.send_channel(1, to or mt.BROADCAST, { portnum = mt.PORT.NODEINFO, payload = my_user(), want_response = want_response })
+end
+function S.announce() info_left = 2 end
+function S.position_soon() pos_left = 3 end
+
+local function send_position()  -- false when there is nothing to send yet
+  if S.pos_mode == 1 or not S.fix then return false end
+  local t = clock and clock.now and clock.now()
+  S.send_channel(1, mt.BROADCAST, { portnum = mt.PORT.POSITION, payload = mt.encode_position({
+    lat = S.fix.lat, lon = S.fix.lon, alt = tonumber(S.fix.alt), precision = S.pos_mode == 2 and 13 or nil,
+    time = t and t.valid and t.unix or nil }) })
+  return true
+end
+
+local function send_ack(h, ci, request_id)
+  local hops = h.hop_start > 0 and (h.hop_start - h.hop_limit) or 0
+  local limit = h.hop_start == 0 and 0 or math.min(3, hops + 2)
+  S.send_channel(ci, h.from, { portnum = mt.PORT.ROUTING, payload = mt.ACK_PAYLOAD, request_id = request_id }, false, limit)
+end
+
+function S.send_dm(hx, text)
+  local n = S.nodes[hx]
+  local list = S.dm_lines(hx)
+  if not (n and n.pub) then
+    push(list, "me: " .. text .. "  (no key yet)", "fail")
+    S.send_nodeinfo(n and n.num or tonumber(hx, 16), true)
+    shell.toast("Asked for their key: try again shortly")
+    return
+  end
+  n.key = n.key or mt.pki_key(S.priv, n.pub)
+  if not n.key then push(list, "me: " .. text .. "  (bad key)", "fail"); return end
+  local line = add(list, dm_file(hx), "me: " .. text, "me")
+  local base = line[1]
+  line[1] = base .. "  ..."
+  local h = header(n.num, true)
+  h.channel = 0
+  local q = enqueue(h, mt.pki_encrypt(n.key, S.me, h.id, mt.encode_data({ portnum = mt.PORT.TEXT, payload = text })))
+  waiting[pb.hex32(h.id)] = { line = line, base = base, tries = 1, frame = q.frame, at = S.now + 15 }
+end
+
+function S.traceroute(hx)
+  local n = S.nodes[hx]
+  if not n then return end
+  if traces[hx] and S.now - traces[hx].at < 30 then shell.toast("Wait 30 s between traceroutes"); return end
+  local id = S.send_channel(1, n.num, { portnum = mt.PORT.TRACEROUTE, payload = "", want_response = true })
+  traces[hx] = { id = id, at = S.now }
+  n.trace = "waiting for a reply..."
+  shell.toast("Traceroute sent")
+end
+
+-- ---------------------------------------------------------------- receiving
+local function route_text(r, from_hx)
+  local parts = { "me" }
+  for _, v in ipairs(r.route) do parts[#parts + 1] = S.name_of(pb.hex32(v)) end
+  parts[#parts + 1] = S.name_of(from_hx)
+  local s = table.concat(parts, " > ")
+  if #r.route_back > 0 then
+    local back = { S.name_of(from_hx) }
+    for _, v in ipairs(r.route_back) do back[#back + 1] = S.name_of(pb.hex32(v)) end
+    back[#back + 1] = "me"
+    s = s .. "; back " .. table.concat(back, " > ")
+  end
+  return s
+end
+
+local function on_data(h, d, n, hx, ci)
+  local to_me, bcast = mt.same(h.to, S.me), mt.same(h.to, mt.BROADCAST)
+  local p = d.portnum
+  if p == mt.PORT.TEXT then
+    local text = S.clean(d.payload):sub(1, 230)
+    if bcast and ci then
+      add(S.chat_lines(ci), chat_file(ci), S.name_of(hx) .. ": " .. text, "them")
+      if not (tab == 1 and S.chan_sel == ci) then S.unread_chat = (S.unread_chat or 0) + 1 end
+      shell.sound("notify")
+    elseif to_me then
+      add(S.dm_lines(hx), dm_file(hx), S.name_of(hx) .. ": " .. text, "them")
+      if not (tab == 3 and S.peer == hx) then S.unread[hx] = (S.unread[hx] or 0) + 1 end
+      shell.sound("notify")
+    end
+    if to_me and h.want_ack then send_ack(h, ci or 1, h.id) end
+  elseif p == mt.PORT.NODEINFO then
+    local u = mt.decode_user(d.payload)
+    if u then
+      n.long, n.short = S.clean(u.long_name or ""):sub(1, 39), S.clean(u.short_name or ""):sub(1, 4)
+      if u.public_key and not n.pub then n.pub, n.key = u.public_key, nil end
+      nodes_dirty = true
+      if d.want_response and (to_me or bcast) and S.now - (n.info_at or -1e9) > 600 then
+        n.info_at = S.now
+        S.send_nodeinfo(h.from, false)
+      end
+    end
+  elseif p == mt.PORT.POSITION then
+    local pos = mt.decode_position(d.payload)
+    if pos and math.abs(pos.lat) <= 90 and math.abs(pos.lon) <= 180 and (pos.lat ~= 0 or pos.lon ~= 0) then
+      n.lat, n.lon, n.alt, n.pos_at = pos.lat, pos.lon, pos.alt, S.now
+    end
+  elseif p == mt.PORT.TELEMETRY then
+    local t = mt.decode_telemetry(d.payload)
+    if t then for k, v in pairs(t) do n[k] = v end end
+  elseif p == mt.PORT.TRACEROUTE and to_me and d.request_id then
+    local tr = traces[hx]
+    local r = mt.decode_route(d.payload)
+    if tr and r and mt.same(tr.id, d.request_id) then
+      n.trace = route_text(r, hx)
+      traces[hx] = nil
+      shell.toast("Traceroute: " .. #r.route .. " hop(s) between")
+    end
+  elseif p == mt.PORT.ROUTING and to_me and d.request_id then
+    local k = pb.hex32(d.request_id)
+    local w, r = waiting[k], mt.decode_routing(d.payload)
+    if w and r then
+      waiting[k] = nil
+      if r.error == 0 then w.line[1] = w.base .. "  ok"
+      else
+        w.line[1], w.line[2] = w.base .. "  (failed, " .. r.error .. ")", "fail"
+        if r.error == 35 then S.send_nodeinfo(h.from, false) end  -- they don't have our key yet
+      end
+    end
+    if h.want_ack and h.hop_start - h.hop_limit == 0 then send_ack(h, ci or 1, h.id) end
+  end
+end
+
+local function on_packet(pk)
+  local h, payload = mt.unpack(tostring(pk.data or ""))
+  if not h then return end
+  if mt.same(h.from, S.me) then  -- a relay of ours: it reached the mesh
+    local w = waiting[pb.hex32(h.id)]
+    if w then w.relayed = true end
+    return
+  end
+  if not hist.check(h.from, h.id) then return end
+  local d, ci
+  if h.channel == 0 and mt.same(h.to, S.me) then
+    local n0 = S.nodes[pb.hex32(h.from)]
+    if n0 and n0.pub then
+      n0.key = n0.key or mt.pki_key(S.priv, n0.pub)
+      local plain = n0.key and mt.pki_decrypt(n0.key, h.from, h.id, payload)
+      d = plain and mt.decode_data(plain)
+    end
+  end
+  for i, c in ipairs(S.channels) do
+    if d then break end
+    if c.hash == h.channel then
+      d = mt.decode_data(mt.channel_crypt(c.key, h.from, h.id, payload))
+      if d then ci = i end
+    end
+  end
+  if not d then
+    print(string.format("mesh: heard %s ch %02x, can't read it", mt.id_text(h.from), h.channel))
+    return
+  end
+  S.rx = S.rx + 1
+  local n, hx = node(h.from)
+  print(string.format("mesh: %s port %d ch %s %d dBm hops %s", mt.id_text(h.from), d.portnum, ci or "pki",
+    math.floor(tonumber(pk.rssi) or 0), h.hop_start > 0 and (h.hop_start - h.hop_limit) or "?"))
+  local first = not n.long and not n.short
+  n.rssi, n.snr, n.seen = tonumber(pk.rssi) or 0, tonumber(pk.snr) or 0, S.now
+  n.hops = h.hop_start > 0 and (h.hop_start - h.hop_limit) or nil
+  on_data(h, d, n, hx, ci)
+  if first and d.portnum ~= mt.PORT.NODEINFO and S.now - (n.info_at or -1e9) > 600 then
+    n.info_at = S.now
+    S.send_nodeinfo(h.from, true)  -- swap names and keys with a node we haven't met
+  end
+end
+
+-- ---------------------------------------------------------------- radio
+function S.start_radio()
+  S.preset = mt.PRESETS[S.preset_i]
+  local p = S.preset
+  local slot
+  S.freq, slot = mt.freq_us(p)
+  set_channel(1, "", "\1")
+  for i = 2, #S.channels do set_channel(i, S.channels[i].name, S.channels[i].psk) end
+  if not lora then S.radio_ok, S.radio_err = false, "No LoRa support in this firmware"; return end
+  local ok, r, e = pcall(lora.begin, { freq = S.freq, bw = p.bw, sf = p.sf, cr = p.cr,
+    sync = 0x2B, preamble = 16, power = 22, tcxo = 1.8 })
+  S.radio_ok = ok and r == true
+  S.radio_err = not S.radio_ok and tostring(ok and (e or "LoRa radio not found") or r) or nil
+  if S.radio_ok then
+    push(S.chat_lines(1), string.format("* %s %.3f MHz (slot %d) as %s", p.name, S.freq, slot, mt.id_text(S.me)), "sys")
+    info_left = 5
+  end
+end
+
+-- ---------------------------------------------------------------- tabs
+local function load_tab(i)  -- literal requires, so tools/release.py ships them
+  if i == 2 then return require("mesh/nodes") elseif i == 4 then return require("mesh/setup") end
+end
+local MODS = { nil, "mesh/nodes", nil, "mesh/setup" }
+
+function S.set_tab(i)
+  if tabmod then
+    if tabmod.close then tabmod.close() end
+    unload(MODS[tab])
+    tabmod = nil
+    collectgarbage("collect")
+  end
+  tab, scroll = i, 0
+  if MODS[i] then
+    tabmod = load_tab(i)(S)
+    if tabmod.init then tabmod.init() end
+  end
+end
+
+function S.open_dm(hx)
+  S.peer = hx
+  S.unread[hx] = nil
+  S.set_tab(3)
+end
+
+-- ---------------------------------------------------------------- lifecycle
+function app.init()
+  shell.focus(true)  -- Wi-Fi off while Mesh is open: its ~36 KB lets Mesh fit
+  load_nodes()
+  local p = cfg.get("mesh_priv")
+  if not p or #p ~= 64 then
+    p = S.hex(crypto.random(32))
+    cfg.set("mesh_priv", p)
+  end
+  S.priv = S.unhex(p)
+  S.pub = crypto.public(S.priv)
+  local mac = (net and net.mac and net.mac() or "000000000000"):gsub("[^%x]", "")
+  S.me = tonumber(mac:sub(-8), 16) or 0x50430001
+  if mt.u32(S.me) < 4 or mt.same(S.me, mt.BROADCAST) then S.me = 0x50430001 end
+  S.me_hex = pb.hex32(S.me)
+  S.long_name = cfg.get("mesh_long") or ("PocketLua " .. S.me_hex:sub(-4))
+  S.short_name = cfg.get("mesh_short") or S.me_hex:sub(-4)
+  S.preset_i = math.max(1, math.min(#mt.PRESETS, tonumber(cfg.get("mesh_preset")) or 1))
+  S.pos_mode = math.max(1, math.min(3, tonumber(cfg.get("mesh_pos")) or 1))
+  S.preset = mt.PRESETS[S.preset_i]
+  load_channels()
+  S.start_radio()
+  if gps then pcall(gps.start) end
+end
+
+function app.update(dt)
+  S.now = S.now + dt
+  blink = (S.now % 1) < 0.5
+  gps_left = gps_left - dt
+  if gps_left <= 0 and gps then
+    gps_left = 2
+    local ok, g = pcall(gps.read)
+    S.fix = ok and g and g.valid and g or nil
+  end
+  if tabmod and tabmod.update then tabmod.update(dt) end
+  if not S.radio_ok then return end
+
+  for _ = 1, 4 do  -- recv() also finishes a transmit, so it runs every frame
+    local ok, pk = pcall(lora.recv)
+    if not ok or not pk then break end
+    on_packet(pk)
+  end
+
+  info_left, pos_left, save_left = info_left - dt, pos_left - dt, save_left - dt
+  if info_left <= 0 then info_left = NODEINFO_EVERY; S.send_nodeinfo(nil, false) end
+  if pos_left <= 0 then pos_left = send_position() and POS_EVERY or 30 end
+  if save_left <= 0 then save_left = 30; save_nodes() end
+
+  for k, w in pairs(waiting) do  -- three tries for a DM without an ACK
+    if S.now >= w.at then
+      if w.tries >= 3 then
+        waiting[k] = nil
+        if w.relayed then w.line[1] = w.base .. "  (sent, no receipt)"
+        else w.line[1], w.line[2] = w.base .. "  (not delivered)", "fail" end
+      else
+        w.tries, w.at = w.tries + 1, S.now + 15
+        queue[#queue + 1] = { frame = w.frame, at = S.now }
+      end
+    end
+  end
+
+  if #queue > 0 and not lora.busy() and S.now >= queue[1].at then
+    local q = table.remove(queue, 1)
+    local ok, r = pcall(lora.send, q.frame)
+    if ok and r ~= false then S.tx = S.tx + 1 end
+  end
+
+  if tab == 1 then S.unread_chat = nil end
+  local dm = 0
+  for _, c in pairs(S.unread) do dm = dm + c end
+  TABS[1] = S.unread_chat and ("Chat " .. S.unread_chat) or "Chat"
+  TABS[3] = dm > 0 and ("DMs " .. dm) or "DMs"
 end
 
 local function kind_col(kind)
@@ -71,324 +489,7 @@ local function kind_col(kind)
   return col.text
 end
 
--- ---------------------------------------------------------------- node list
-local function save_nodes()
-  if not nodes_dirty then return end
-  local out = {}
-  for hx, n in pairs(nodes) do
-    out[#out + 1] = table.concat({ hx, (n.long or ""):gsub("[|\n]", " "), (n.short or ""):gsub("[|\n]", " "),
-      n.pub and hex(n.pub) or "" }, "|") .. "\n"
-  end
-  sys.mkdirs(DIR)
-  sys.write_text(NODES_FILE, table.concat(out))
-  nodes_dirty = false
-end
-
-local function load_nodes()
-  for line in (sys.read_text(NODES_FILE) or ""):gmatch("[^\n]+") do
-    local hx, l, s, k = line:match("^(%x+)|([^|]*)|([^|]*)|(%x*)$")
-    if hx then
-      nodes[hx] = { num = tonumber(hx, 16), long = l, short = s, pub = #k == 64 and unhex(k) or nil }
-    end
-  end
-end
-
-local function node(num)
-  local hx = mt.u32(num) == mt.u32(me) and me_hex or pb.hex32(num)
-  local n = nodes[hx]
-  if not n then
-    local count, old, old_seen = 0, nil, math.huge
-    for k, v in pairs(nodes) do
-      count = count + 1
-      if (v.seen or -1) < old_seen and k ~= peer then old, old_seen = k, v.seen or -1 end
-    end
-    if count >= MAX_NODES and old then nodes[old] = nil end
-    n = { num = num }
-    nodes[hx] = n
-  end
-  return n, hx
-end
-
--- ---------------------------------------------------------------- sending
-local function header(to, want_ack, hop_limit, channel)
-  return { to = to, from = me, id = mt.new_id(), hop_limit = hop_limit or 3, hop_start = hop_limit or 3,
-    want_ack = want_ack, channel = channel, relay = mt.last_byte(me) }
-end
-
-local function enqueue(h, payload, extra)
-  hist.check(me, h.id)
-  local q = extra or {}
-  q.frame, q.at, q.id = mt.pack(h, payload), now + 0.05 + math.random() * 0.25, h.id
-  queue[#queue + 1] = q
-  return q
-end
-
--- on the channel key (broadcasts, NodeInfo, positions, ACKs)
-local function send_channel(to, data, want_ack, hop_limit)
-  local h = header(to, want_ack and to ~= mt.BROADCAST, hop_limit, chan_hash)
-  return enqueue(h, mt.channel_crypt(chan_key, me, h.id, mt.encode_data(data))), h.id
-end
-
-local function my_user()
-  return mt.encode_user({ id = mt.id_text(me), long_name = long_name, short_name = short_name,
-    hw_model = mt.HW_PRIVATE, role = mt.ROLE_CLIENT_MUTE, public_key = pub })
-end
-
-local function send_nodeinfo(to, want_response)
-  send_channel(to or mt.BROADCAST, { portnum = mt.PORT.NODEINFO, payload = my_user(), want_response = want_response })
-end
-
-local function send_position()  -- false when there is nothing to send yet
-  if pos_mode == 1 or not fix then return false end
-  local t = clock and clock.now and clock.now()
-  send_channel(mt.BROADCAST, { portnum = mt.PORT.POSITION, payload = mt.encode_position({
-    lat = fix.lat, lon = fix.lon, alt = tonumber(fix.alt), precision = pos_mode == 2 and 13 or nil,
-    time = t and t.valid and t.unix or nil }) })
-  return true
-end
-
-local function send_ack(h, request_id)
-  local hops = h.hop_start > 0 and (h.hop_start - h.hop_limit) or 0
-  local limit = h.hop_start == 0 and 0 or math.min(3, hops + 2)
-  send_channel(h.from, { portnum = mt.PORT.ROUTING, payload = mt.ACK_PAYLOAD, request_id = request_id }, false, limit)
-end
-
-local function send_dm(hx, text)
-  local n = nodes[hx]
-  dms[hx] = dms[hx] or {}
-  local line = add(dms[hx], "me: " .. text .. "  ...", "me")
-  if not (n and n.pub) then
-    line[1], line[2] = "me: " .. text .. "  (no key yet)", "fail"
-    send_nodeinfo(n and n.num or tonumber(hx, 16), true)
-    shell.toast("Asked for their key: try again shortly")
-    return
-  end
-  n.key = n.key or mt.pki_key(priv, n.pub)
-  if not n.key then line[1], line[2] = "me: " .. text .. "  (bad key)", "fail"; return end
-  local h = header(n.num, true)
-  h.channel = 0
-  local plain = mt.encode_data({ portnum = mt.PORT.TEXT, payload = text })
-  local q = enqueue(h, mt.pki_encrypt(n.key, me, h.id, plain))
-  waiting[pb.hex32(h.id)] = { line = line, text = text, tries = 1, frame = q.frame, at = now + 15 }
-end
-
--- ---------------------------------------------------------------- receiving
-local function on_data(h, d, n, hx, pki)
-  local to_me = mt.same(h.to, me)
-  local bcast = mt.same(h.to, mt.BROADCAST)
-  local p = d.portnum
-  if p == mt.PORT.TEXT then
-    local text = clean(d.payload):sub(1, 230)
-    if bcast then
-      add(chat, name_of(hx) .. ": " .. text, "them")
-      if tab ~= 1 then unread = unread + 1 end
-      shell.sound("notify")
-    elseif to_me then
-      dms[hx] = dms[hx] or {}
-      add(dms[hx], name_of(hx) .. ": " .. text, "them")
-      if not (tab == 3 and peer == hx) then unread = unread + 1 end
-      shell.sound("notify")
-      if not pki then add(dms[hx], "* (sent without encryption)", "sys") end
-    end
-    if to_me and h.want_ack then send_ack(h, h.id) end
-  elseif p == mt.PORT.NODEINFO then
-    local u = mt.decode_user(d.payload)
-    if u then
-      n.long, n.short = clean(u.long_name or ""):sub(1, 39), clean(u.short_name or ""):sub(1, 4)
-      if u.public_key and not n.pub then n.pub, n.key = u.public_key, nil end
-      nodes_dirty = true
-      if d.want_response and (to_me or bcast) and now - (n.info_at or -1e9) > 600 then
-        n.info_at = now
-        send_nodeinfo(h.from, false)
-      end
-    end
-  elseif p == mt.PORT.POSITION then
-    local pos = mt.decode_position(d.payload)
-    if pos and math.abs(pos.lat) <= 90 and math.abs(pos.lon) <= 180 and (pos.lat ~= 0 or pos.lon ~= 0) then
-      n.lat, n.lon = pos.lat, pos.lon
-    end
-  elseif p == mt.PORT.ROUTING and to_me and d.request_id then
-    local w = waiting[pb.hex32(d.request_id)]
-    local r = mt.decode_routing(d.payload)
-    if w and r then
-      waiting[pb.hex32(d.request_id)] = nil
-      if r.error == 0 then
-        w.line[1] = "me: " .. w.text .. "  ok"
-      else
-        w.line[1], w.line[2] = "me: " .. w.text .. "  (failed, " .. r.error .. ")", "fail"
-        if r.error == 35 then send_nodeinfo(h.from, false) end  -- they don't have our key yet
-      end
-    end
-    if h.want_ack and h.hop_start - h.hop_limit == 0 then send_ack(h, h.id) end
-  end
-end
-
-local function on_packet(pk)
-  local h, payload = mt.unpack(tostring(pk.data or ""))
-  if not h then return end
-  if mt.same(h.from, me) then  -- a relay of ours: counts as delivered to the mesh
-    local w = waiting[pb.hex32(h.id)]
-    if w then w.relayed = true end
-    return
-  end
-  if not hist.check(h.from, h.id) then return end
-  local plain, pki
-  if h.channel == chan_hash then
-    plain = mt.channel_crypt(chan_key, h.from, h.id, payload)
-  elseif h.channel == 0 and mt.same(h.to, me) then
-    local n0 = nodes[pb.hex32(h.from)]
-    if n0 and n0.pub then
-      n0.key = n0.key or mt.pki_key(priv, n0.pub)
-      plain, pki = n0.key and mt.pki_decrypt(n0.key, h.from, h.id, payload), true
-    end
-  end
-  local d = plain and mt.decode_data(plain)
-  if not d then  -- another channel, or a key we don't have
-    print(string.format("mesh: heard %s ch %02x, can't read it", mt.id_text(h.from), h.channel))
-    return
-  end
-  rx = rx + 1
-  print(string.format("mesh: %s port %d%s %d dBm hops %s", mt.id_text(h.from), d.portnum, pki and " pki" or "",
-    math.floor(tonumber(pk.rssi) or 0), h.hop_start > 0 and (h.hop_start - h.hop_limit) or "?"))
-  local n, hx = node(h.from)
-  local first = not n.long and not n.short
-  n.rssi, n.snr, n.seen = tonumber(pk.rssi) or 0, tonumber(pk.snr) or 0, now
-  n.hops = h.hop_start > 0 and (h.hop_start - h.hop_limit) or nil
-  on_data(h, d, n, hx, pki)
-  if first and d.portnum ~= mt.PORT.NODEINFO and now - (n.info_at or -1e9) > 600 then
-    n.info_at = now
-    send_nodeinfo(h.from, true)  -- swap names and keys with a node we haven't met
-  end
-  rows_left = 0
-end
-
--- ---------------------------------------------------------------- radio
-local function start_radio()
-  preset = mt.PRESETS[preset_i]
-  local slot
-  freq, slot = mt.freq_us(preset, chan_name ~= "" and chan_name or nil)
-  chan_key = mt.expand_psk("\1")
-  chan_hash = mt.channel_hash(chan_name ~= "" and chan_name or preset.name, chan_key)
-  if not lora then radio_ok, radio_err = false, "No LoRa support in this firmware"; return end
-  local ok, r, e = pcall(lora.begin, { freq = freq, bw = preset.bw, sf = preset.sf, cr = preset.cr,
-    sync = 0x2B, preamble = 16, power = 22, tcxo = 1.8 })
-  radio_ok = ok and r == true
-  radio_err = not radio_ok and tostring(ok and (e or "LoRa radio not found") or r) or nil
-  if radio_ok then
-    add(chat, string.format("* %s on %.3f MHz (slot %d) as %s", preset.name, freq, slot, mt.id_text(me)), "sys")
-    info_left = 5
-  end
-end
-
-local function build_setup()
-  srows = {
-    { label = "Name", value = ui.fit(long_name, 120) },
-    { label = "Short name", value = short_name },
-    { label = "Preset", value = preset and preset.name or "?" },
-    { label = "Share position", value = POS_MODES[pos_mode] },
-    { label = "Node", value = mt.id_text(me), dim = true },
-    { label = "Packets", value = "TX " .. tx .. "  RX " .. rx, dim = true },
-  }
-end
-
-local function build_nodes()
-  rows = {}
-  local list = {}
-  for hx, n in pairs(nodes) do if hx ~= me_hex then list[#list + 1] = { hx, n } end end
-  table.sort(list, function(a, b) return (a[2].seen or -1) > (b[2].seen or -1) end)
-  for i, e in ipairs(list) do
-    local hx, n = e[1], e[2]
-    local where = ""
-    if n.lat and fix then
-      where = " " .. geo.fmt_dist(geo.dist(fix.lat, fix.lon, n.lat, n.lon)) .. " "
-        .. geo.compass(geo.bearing(fix.lat, fix.lon, n.lat, n.lon))
-    end
-    local heard = n.seen and (n.hops and n.hops > 0 and (n.hops .. " hop") or string.format("%d dBm", n.rssi or 0))
-      or "saved"
-    rows[i] = { label = ui.fit(name_of(hx) .. " " .. (n.long or "") .. where, 150), value = heard,
-      dim = not n.seen, hex = hx, badge = n.pub and "K" or nil }
-  end
-  rsel = math.max(1, math.min(rsel, #rows))
-end
-
--- ---------------------------------------------------------------- lifecycle
-function app.init()
-  load_nodes()
-  local p = cfg.get("mesh_priv")
-  if not p or #p ~= 64 then
-    p = hex(crypto.random(32))
-    cfg.set("mesh_priv", p)
-  end
-  priv = unhex(p)
-  pub = crypto.public(priv)
-  local mac = (net and net.mac and net.mac() or "000000000000"):gsub("[^%x]", "")
-  me = tonumber(mac:sub(-8), 16) or 0x50430001
-  if mt.u32(me) < 4 or mt.same(me, mt.BROADCAST) then me = 0x50430001 end
-  me_hex = pb.hex32(me)
-  long_name = cfg.get("mesh_long") or ("PocketLua " .. me_hex:sub(-4))
-  short_name = cfg.get("mesh_short") or me_hex:sub(-4)
-  preset_i = math.max(1, math.min(#mt.PRESETS, tonumber(cfg.get("mesh_preset")) or 1))
-  pos_mode = math.max(1, math.min(3, tonumber(cfg.get("mesh_pos")) or 1))
-  start_radio()
-  if gps then pcall(gps.start) end
-  add(chat, "* Enter sends to everyone on " .. (preset and preset.name or "?") .. ". Tab: Nodes, DMs", "sys")
-  build_setup()
-end
-
-function app.update(dt)
-  now = now + dt
-  blink = (now % 1) < 0.5
-
-  gps_left = gps_left - dt
-  if gps_left <= 0 and gps then
-    gps_left = 2
-    local ok, g = pcall(gps.read)
-    fix = ok and g and g.valid and g or nil
-  end
-  if not radio_ok then return end
-
-  for _ = 1, 4 do  -- recv() also finishes a transmit, so it runs every frame
-    local ok, pk = pcall(lora.recv)
-    if not ok or not pk then break end
-    on_packet(pk)
-  end
-
-  info_left, pos_left = info_left - dt, pos_left - dt
-  if info_left <= 0 then info_left = NODEINFO_EVERY; send_nodeinfo(nil, false) end
-  if pos_left <= 0 then pos_left = send_position() and POS_EVERY or 30 end
-
-  -- resend DMs that got no ACK and weren't heard relayed: three tries
-  for k, w in pairs(waiting) do
-    if now >= w.at then
-      if w.tries >= 3 then
-        waiting[k] = nil
-        if w.relayed then w.line[1] = "me: " .. w.text .. "  (sent, no receipt)"
-        else w.line[1], w.line[2] = "me: " .. w.text .. "  (not delivered)", "fail" end
-      else
-        w.tries, w.at = w.tries + 1, now + 15
-        queue[#queue + 1] = { frame = w.frame, at = now }
-      end
-    end
-  end
-
-  if #queue > 0 and not lora.busy() and now >= queue[1].at then
-    local q = table.remove(queue, 1)
-    local ok, r = pcall(lora.send, q.frame)
-    if ok and r ~= false then tx = tx + 1 end
-  end
-
-  rows_left = rows_left - dt
-  if rows_left <= 0 then
-    rows_left = 1
-    if tab == 2 then build_nodes() elseif tab == 4 then build_setup() end
-    if nodes_dirty and math.floor(now) % 30 == 0 then save_nodes() end
-  end
-  if tab == 1 or (tab == 3 and peer) then unread = 0 end
-  local label = unread > 0 and ("Chat " .. unread) or "Chat"
-  if TABS[1] ~= label then TABS[1] = label end
-end
-
-local function draw_lines(list)
+local function draw_lines(list, label)
   local last = #list - scroll
   for i = 0, ROWS - 1 do
     local l = list[last - ROWS + 1 + i]
@@ -396,80 +497,43 @@ local function draw_lines(list)
   end
   if scroll > 0 then ui.right(236, 33, "^" .. scroll, col.muted) end
   gfx.line(4, 107, 236, 107, col.line)
-  local shown = #input > 36 and input:sub(-36) or input
+  local shown = #input > 26 and input:sub(-26) or input
   ui.text(4, 112, "> " .. shown .. (blink and "_" or ""), col.text)
+  ui.right(236, 112, ui.fit(label, 70), col.muted)
 end
 
 function app.draw()
   ui.tabs(TABS, tab, 16)
-  if tab == 4 then
-    stop_ = ui.list(srows, ssel, stop_, 4, 33, 229, 15, 5)
-    ui.text(4, 112, "Enter or </> changes", col.muted)
-    ui.footer({ { "Enter", "Change" }, { "Tab", "Chat" }, { "Esc", "Back" } })
-    return
-  end
-  if not radio_ok then
-    ui.empty("antenna", ui.fit(tostring(radio_err), 228), "Attach the Cap LoRa-1262")
-    ui.footer({ { "R", "Retry" }, { "Tab", "Setup" }, { "Esc", "Back" } })
+  if tabmod then tabmod.draw(); return end
+  if not S.radio_ok then
+    ui.empty("antenna", ui.fit(tostring(S.radio_err), 228), "Attach the Cap LoRa-1262")
+    ui.footer({ { "R", "Retry" }, { "Tab", "Next" }, { "Esc", "Back" } })
     return
   end
   if tab == 1 then
-    draw_lines(chat)
-    ui.footer({ { "Enter", "Send all" }, { "Tab", "Nodes" }, { "Esc", "Back" } })
-  elseif tab == 2 then
-    if #rows == 0 then ui.empty("antenna", "No nodes heard yet", "They appear as they send")
-    else rtop = ui.list(rows, rsel, rtop, 4, 33, 229, 15, 6) end
-    ui.footer({ { "Enter", "Message" }, { "Tab", "DMs" }, { "Esc", "Back" } })
+    draw_lines(S.chat_lines(S.chan_sel), S.chan_name(S.chan_sel))
+    ui.footer(#S.channels > 1 and { { "Enter", "Send" }, { "<>", "Channel" }, { "Tab", "Nodes" } }
+      or { { "Enter", "Send all" }, { "Tab", "Nodes" }, { "Esc", "Back" } })
+  elseif not S.peer then
+    ui.empty("antenna", "No conversation open", "Pick a node in Nodes, Enter")
+    ui.footer({ { "Tab", "Setup" }, { "Esc", "Back" } })
   else
-    if not peer then
-      ui.empty("antenna", "No conversation open", "Pick a node in Nodes, Enter")
-    else
-      draw_lines(dms[peer] or {})
-      ui.right(236, 112, name_of(peer), col.muted)
-    end
+    draw_lines(S.dm_lines(S.peer), S.name_of(S.peer))
     ui.footer({ { "Enter", "Send" }, { "Tab", "Setup" }, { "Esc", "Back" } })
   end
 end
 
-local function change(i, d)
-  if i == 1 or i == 2 then
-    shell.prompt(i == 1 and "Name (up to 39)" or "Short name (up to 4)", i == 1 and long_name or short_name, function(t)
-      t = t and clean(t):match("^%s*(.-)%s*$")
-      if not t or t == "" then return end
-      if i == 1 then long_name = t:sub(1, 39); cfg.set("mesh_long", long_name)
-      else short_name = t:sub(1, 4); cfg.set("mesh_short", short_name) end
-      info_left = 2  -- tell the mesh
-      build_setup()
-    end)
-    return
-  elseif i == 3 then
-    preset_i = (preset_i - 1 + d) % #mt.PRESETS + 1
-    cfg.set("mesh_preset", tostring(preset_i))
-    start_radio()
-    shell.toast(radio_ok and string.format("%s %.3f MHz", preset.name, freq) or ("Radio: " .. tostring(radio_err)))
-  elseif i == 4 then
-    pos_mode = (pos_mode - 1 + d) % #POS_MODES + 1
-    cfg.set("mesh_pos", tostring(pos_mode))
-    pos_left = 3
-    shell.toast(pos_mode == 1 and "Position not shared" or pos_mode == 2 and "Sharing an approximate position (~5 km)"
-      or "Sharing your exact position", 2)
-  else
-    return
-  end
-  build_setup()
-end
-
-local function type_key(k, on_send)
+local function type_key(k, d, on_send)
   if k.key == "enter" then
-    local t = clean(input):match("^%s*(.-)%s*$")
+    local t = S.clean(input):match("^%s*(.-)%s*$")
     if t ~= "" then on_send(t:sub(1, 200)) end
     input = ""
   elseif k.key == "backspace" then input = input:sub(1, -2)
   elseif k.key == "esc" then
     if input == "" then return false end
     input = ""
-  elseif k.key == "up" then scroll = scroll + 1
-  elseif k.key == "down" then scroll = math.max(0, scroll - 1)
+  elseif d == "up" then scroll = scroll + 1
+  elseif d == "down" then scroll = math.max(0, scroll - 1)
   elseif k.text and not k.ctrl and not k.fn then
     if #input < 200 then input = input .. k.text end
   else
@@ -480,54 +544,44 @@ end
 
 function app.key(k)
   if k.key == "tab" then
-    tab = k.shift and (tab - 2) % #TABS + 1 or tab % #TABS + 1
-    rows_left, scroll = 0, 0
+    S.set_tab(k.shift and (tab - 2) % #TABS + 1 or tab % #TABS + 1)
     return true
   end
-  if tab == 4 then
-    local d = ui.nav(k)
-    if d == "up" then ssel = math.max(1, ssel - 1)
-    elseif d == "down" then ssel = math.min(#srows, ssel + 1)
-    elseif k.key == "enter" or d == "right" then change(ssel, 1)
-    elseif d == "left" then change(ssel, -1)
-    else return k.key ~= "esc" end
-    return true
-  end
-  if not radio_ok then
+  local d = ui.nav(k)
+  if tabmod then return tabmod.key(k, d) end
+  if not S.radio_ok then
     if k.text and k.text:lower() == "r" and not k.fn then
-      start_radio()
-      shell.toast(radio_ok and "Radio ready" or tostring(radio_err))
+      S.start_radio()
+      shell.toast(S.radio_ok and "Radio ready" or tostring(S.radio_err))
       return true
     end
     return k.key ~= "esc"
   end
-  if tab == 2 then
-    local d = ui.nav(k)
-    if d == "up" then rsel = math.max(1, rsel - 1)
-    elseif d == "down" then rsel = math.min(#rows, rsel + 1)
-    elseif k.key == "enter" and rows[rsel] then
-      peer, tab, scroll = rows[rsel].hex, 3, 0
-    else return k.key ~= "esc" end
+  if tab == 3 then
+    if not S.peer then return k.key ~= "esc" end
+    S.unread[S.peer] = nil
+    return type_key(k, d, function(t) S.send_dm(S.peer, t) end)
+  end
+  if (d == "left" or d == "right") and #S.channels > 1 then
+    S.chan_sel = (S.chan_sel - 1 + (d == "left" and -1 or 1)) % #S.channels + 1
+    scroll = 0
     return true
   end
-  if tab == 3 then
-    if not peer then return k.key ~= "esc" end
-    return type_key(k, function(t) send_dm(peer, t) end)
-  end
-  return type_key(k, function(t)
-    send_channel(mt.BROADCAST, { portnum = mt.PORT.TEXT, payload = t })
-    add(chat, "me: " .. t, "me")
+  return type_key(k, d, function(t)
+    S.send_channel(S.chan_sel, mt.BROADCAST, { portnum = mt.PORT.TEXT, payload = t })
+    add(S.chat_lines(S.chan_sel), chat_file(S.chan_sel), "me: " .. t, "me")
   end)
 end
 
 function app.close()
+  if tabmod and tabmod.close then tabmod.close() end
+  tabmod = nil
   save_nodes()
   if lora then pcall(lora.stop) end
   if gps then pcall(gps.stop) end
-  chat, dms, nodes, rows, queue, waiting = {}, {}, {}, {}, {}, {}
+  S.chat, S.dms, S.nodes, queue, waiting = {}, {}, {}, {}, {}
   unload("meshtastic")
   unload("protobuf")
-  unload("geo_math")
 end
 
 return app
