@@ -1095,11 +1095,34 @@ static volatile bool radioFlag = false;
 static bool radioTx = false;
 static void IRAM_ATTR onRadio() { radioFlag = true; }
 
+static float optField(lua_State *L, const char *k, float def) {
+  lua_getfield(L, 1, k);
+  float v = lua_isnumber(L, -1) ? (float)lua_tonumber(L, -1) : def;
+  lua_pop(L, 1);
+  return v;
+}
+
 // begin([freq_mhz=915][, sf=9][, power_dbm=14]) -> true | false, error
+// begin{freq=, bw=125, sf=9, cr=5, sync=0x12, preamble=12, power=14, tcxo=3.0}:
+// the Mesh app's Meshtastic settings. A TCXO that doesn't start is retried as
+// a crystal (tcxo 0).
 static int lo_begin(lua_State *L) {
-  float freq = (float)luaL_optnumber(L, 1, 915.0);
-  int sf = (int)luaL_optinteger(L, 2, 9);
-  int power = (int)luaL_optinteger(L, 3, 14);
+  float freq = 915.0, bw = 125.0, tcxo = 3.0;
+  int sf = 9, cr = 5, sync = 0x12, preamble = 12, power = 14;
+  if (lua_istable(L, 1)) {
+    freq = optField(L, "freq", freq);
+    bw = optField(L, "bw", bw);
+    sf = (int)optField(L, "sf", sf);
+    cr = (int)optField(L, "cr", cr);
+    sync = (int)optField(L, "sync", sync);
+    preamble = (int)optField(L, "preamble", preamble);
+    power = (int)optField(L, "power", power);
+    tcxo = optField(L, "tcxo", tcxo);
+  } else {
+    freq = (float)luaL_optnumber(L, 1, freq);
+    sf = (int)luaL_optinteger(L, 2, sf);
+    power = (int)luaL_optinteger(L, 3, power);
+  }
   m5::PI4IOE5V6408_Class ioe(0x43, 400000, &m5::In_I2C);
   if (!ioe.begin()) { lua_pushboolean(L, 0); lua_pushstring(L, "LoRa cap not found"); return 2; }
   ioe.setDirection(0, true);
@@ -1108,7 +1131,8 @@ static int lo_begin(lua_State *L) {
   // given the bus rather than owning it: RadioLib ends a bus it owns when no
   // chip answers, and that is the SD card's bus
   if (!radio) radio = new SX1262(radioMod = new Module(5, 4, 3, 6, SPI));
-  int st = radio->begin(freq, 125.0, sf, 5, 0x12, power, 12, 3.0, true);
+  int st = radio->begin(freq, bw, sf, cr, sync, power, preamble, tcxo, true);
+  if (st != RADIOLIB_ERR_NONE && tcxo > 0) st = radio->begin(freq, bw, sf, cr, sync, power, preamble, 0, true);
   luaBudgetReset();
   if (st != RADIOLIB_ERR_NONE) { lua_pushboolean(L, 0); lua_pushfstring(L, "radio error %d", st); return 2; }
   radio->setCurrentLimit(140);
@@ -1121,10 +1145,11 @@ static int lo_begin(lua_State *L) {
 
 static int lo_send(lua_State *L) {
   if (!radio || radioTx) { lua_pushboolean(L, 0); return 1; }
-  String s = str(L, 1);
-  if (s.length() > 240) s = s.substring(0, 240);
+  size_t n;
+  const char *s = luaL_checklstring(L, 1, &n);  // binary-safe: Mesh packets have NUL bytes
+  if (n > 255) n = 255;
   radioTx = true;
-  lua_pushboolean(L, radio->startTransmit(s) == RADIOLIB_ERR_NONE);
+  lua_pushboolean(L, radio->startTransmit((const uint8_t *)s, n) == RADIOLIB_ERR_NONE);
   return 1;
 }
 
@@ -1139,13 +1164,15 @@ static int lo_recv(lua_State *L) {
     lua_pushnil(L);
     return 1;
   }
-  String s;
-  int st = radio->readData(s);
+  uint8_t buf[256];
+  size_t n = radio->getPacketLength();
+  if (n > sizeof buf) n = sizeof buf;
+  int st = radio->readData(buf, n);
   float rssi = radio->getRSSI(), snr = radio->getSNR();
   radio->startReceive();
   if (st != RADIOLIB_ERR_NONE) { lua_pushnil(L); return 1; }
   lua_createtable(L, 0, 3);
-  lua_pushlstring(L, s.c_str(), s.length()); lua_setfield(L, -2, "data");
+  lua_pushlstring(L, (const char *)buf, n); lua_setfield(L, -2, "data");
   lua_pushnumber(L, rssi); lua_setfield(L, -2, "rssi");
   lua_pushnumber(L, snr); lua_setfield(L, -2, "snr");
   return 1;
@@ -1271,10 +1298,11 @@ static const luaL_Reg dispLib[] = {{"image", di_image}, {"fill", di_fill}, {"tex
 extern const luaL_Reg musiclibFns[];  // musiclib.cpp
 extern const luaL_Reg appstoreFns[];  // appstore.cpp
 extern const luaL_Reg backupFns[];    // backup.cpp
+extern const luaL_Reg cryptoFns[];    // meshcrypto_lua.cpp
 static const struct { const char *name; const luaL_Reg *fns; } HW_LIBS[] = {
     {"audio", audioLib}, {"ir", irLib}, {"i2c", i2cLib}, {"http", httpLib},
     {"lora", loraLib}, {"gps", gpsLib}, {"disp", dispLib}, {"musiclib", musiclibFns},
-    {"appstore", appstoreFns}, {"backup", backupFns}};
+    {"appstore", appstoreFns}, {"backup", backupFns}, {"crypto", cryptoFns}};
 
 // sys.hwlib(name) -> the table for that driver or library, or nil (runtime.lua
 // calls it the first time an app uses one of these globals)
