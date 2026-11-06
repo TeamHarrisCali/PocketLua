@@ -4,3 +4,9 @@ dist/*.bin
 /
 src/embedded_files.gen.cpp
 __pycache__/
+# made by pioarduino's framework rebuild (custom_sdkconfig)
+/CMakeLists.txt
+/managed_components/
+/dependencies.lock
+/sdkconfig.*
+/.dummy/
