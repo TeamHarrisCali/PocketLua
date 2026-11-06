@@ -115,6 +115,14 @@ for _, s in ipairs(sent()) do if mt.same(s.h.to, ALICE) and s.h.channel == 0 the
 check(dm and dm.h.want_ack and #dm.payload == #mt.encode_data({ portnum = 1, payload = "hi alice" }) + 12,
   "a DM goes out PKI-encrypted (channel 0, want_ack, tag + nonce)")
 check(shows("hi alice"), "the DM shows in the conversation")
+check(not shows("ok$"), "no status text after the message")
+local ticks = 0
+local line0 = gfx.line
+gfx.line = function(x1, y1, x2, y2, c, ...) if c == ui.col.good and x1 >= 227 then ticks = ticks + 1 end; return line0(x1, y1, x2, y2, c, ...) end
+hear(ALICE, { portnum = mt.PORT.ROUTING, payload = mt.ACK_PAYLOAD, request_id = dm and dm.h.id }, { to = ME })
+ticks = 0; frames(1)
+check(ticks >= 3, "a delivery receipt draws the green double tick")
+gfx.line = line0
 
 key("esc"); frames(2)
 check(shows("ALB") and shows("Contacts") == nil, "Esc in a conversation goes back to the contact list")

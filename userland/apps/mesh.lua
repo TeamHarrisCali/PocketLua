@@ -63,7 +63,7 @@ local function chat_file(i) return DIR .. "/ch_" .. S.chan_name(i):gsub("[^%w%-_
 local function dm_file(hx) return DIR .. "/dm_" .. hx .. ".txt" end
 
 local function push(list, text, kind)
-  for _, l in ipairs(ui.wrap(text, 228)) do list[#list + 1] = { l, kind } end
+  for _, l in ipairs(ui.wrap(text, 220)) do list[#list + 1] = { l, kind } end  -- room for a delivery mark
   while #list > MAX_LINES do table.remove(list, 1) end
   return list[#list]
 end
@@ -264,12 +264,11 @@ function S.send_dm(hx, text)
   if not n.key then push(list, "me: " .. text .. "  (bad key)", "fail"); return end
   touch(hx)
   local line = add(list, dm_file(hx), "me: " .. text, "me")
-  local base = line[1]
-  line[1] = base .. "  ..."
+  line.status = "wait"
   local h = header(n.num, true)
   h.channel = 0
   local q = enqueue(h, mt.pki_encrypt(n.key, S.me, h.id, mt.encode_data({ portnum = mt.PORT.TEXT, payload = text })))
-  waiting[pb.hex32(h.id)] = { line = line, base = base, tries = 1, frame = q.frame, at = S.now + 15 }
+  waiting[pb.hex32(h.id)] = { line = line, tries = 1, frame = q.frame, at = S.now + 15 }
 end
 
 function S.traceroute(hx)
@@ -345,9 +344,9 @@ local function on_data(h, d, n, hx, ci)
     local w, r = waiting[k], mt.decode_routing(d.payload)
     if w and r then
       waiting[k] = nil
-      if r.error == 0 then w.line[1] = w.base .. "  ok"
+      if r.error == 0 then w.line.status = "ok"
       else
-        w.line[1], w.line[2] = w.base .. "  (failed, " .. r.error .. ")", "fail"
+        w.line.status, w.line[2] = "fail", "fail"
         if r.error == 35 then S.send_nodeinfo(h.from, false) end  -- they don't have our key yet
       end
     end
@@ -500,8 +499,8 @@ function app.update(dt)
     if S.now >= w.at then
       if w.tries >= 3 then
         waiting[k] = nil
-        if w.relayed then w.line[1] = w.base .. "  (sent, no receipt)"
-        else w.line[1], w.line[2] = w.base .. "  (not delivered)", "fail" end
+        if w.relayed then w.line.status = "relay"
+        else w.line.status, w.line[2] = "fail", "fail" end
       else
         w.tries, w.at = w.tries + 1, S.now + 15
         queue[#queue + 1] = { frame = w.frame, at = S.now }
@@ -533,7 +532,18 @@ local function draw_lines(list, label)
   local last = #list - scroll
   for i = 0, ROWS - 1 do
     local l = list[last - ROWS + 1 + i]
-    if l then ui.text(4, 33 + i * 10, l[1], kind_col(l[2])) end
+    if l then
+      local y = 33 + i * 10
+      ui.text(4, y, l[1], kind_col(l[2]))
+      local st = l.status
+      if st == "wait" then ui.text(228, y, "..", col.muted)
+      elseif st == "fail" then ui.text(231, y, "!", col.warn)
+      elseif st then  -- a tick when the mesh relayed it, two when they confirmed
+        local c = st == "ok" and col.good or col.muted
+        gfx.line(227, y + 4, 229, y + 6, c); gfx.line(229, y + 6, 233, y + 1, c)
+        if st == "ok" then gfx.line(232, y + 6, 236, y + 1, c) end
+      end
+    end
   end
   if scroll > 0 then ui.right(236, 33, "^" .. scroll, col.muted) end
   gfx.line(4, 107, 236, 107, col.line)
