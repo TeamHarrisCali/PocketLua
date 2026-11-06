@@ -14,6 +14,7 @@ app.help = {
   { "<>", "Chat: channel" },
   { "Up/Dn", "Scroll / pick" },
   { "T", "Node: traceroute" },
+  { "X", "DMs: remove contact" },
   { "Esc", "Clear, then back" },
   { "R", "Retry radio" },
 }
@@ -27,13 +28,14 @@ local MAX_LINES, MAX_NODES, KEEP, ROWS = 40, 40, 40, 7
 local NODEINFO_EVERY, POS_EVERY = 3 * 3600, 15 * 60
 
 -- S is what the tab modules share with the core
-local S = { mt = mt, pb = pb, nodes = {}, channels = {}, chat = {}, dms = {}, unread = {}, chan_sel = 1,
+local S = { mt = mt, pb = pb, nodes = {}, channels = {}, chat = {}, dms = {}, unread = {}, contacts = {}, chan_sel = 1,
   now = 0, tx = 0, rx = 0, pos_mode = 1, preset_i = 1, radio_ok = false }
 local tab, tabmod = 1, nil
 local hist = mt.history(120)
 local nodes_dirty = false
 local scroll, input, blink = 0, "", true
 local queue, waiting, traces = {}, {}, {}
+local crows, csel, ctop = {}, 1, 1  -- the DMs tab's contact list
 local gps_left, info_left, pos_left, save_left = 0, 5, 60, 30
 
 -- ---------------------------------------------------------------- helpers
@@ -99,6 +101,36 @@ function S.dm_lines(hx)
   return S.dms[hx]
 end
 
+-- ---------------------------------------------------------------- contacts
+-- Everyone we've had a DM with, most recent first (data/mesh/contacts.txt).
+-- They stay in the node list (and keep their keys) however many nodes pass.
+local function save_contacts()
+  sys.mkdirs(DIR)
+  sys.write_text(DIR .. "/contacts.txt", table.concat(S.contacts, "\n") .. "\n")
+end
+
+local function touch(hx)
+  for i, c in ipairs(S.contacts) do if c == hx then table.remove(S.contacts, i); break end end
+  table.insert(S.contacts, 1, hx)
+  save_contacts()
+end
+
+function S.is_contact(hx)
+  for _, c in ipairs(S.contacts) do if c == hx then return true end end
+  return false
+end
+
+local function build_contacts()
+  crows = {}
+  for i, hx in ipairs(S.contacts) do
+    local n = S.nodes[hx]
+    crows[i] = { label = ui.fit(S.name_of(hx) .. "  " .. (n and n.long or ""), 150), dim = not (n and n.seen),
+      value = n and n.seen and "nearby" or "", badge = S.unread[hx] and tostring(S.unread[hx]) or nil,
+      badge_color = ui.accents.orange }
+  end
+  csel = math.max(1, math.min(csel, #crows))
+end
+
 -- ---------------------------------------------------------------- nodes
 local function save_nodes()
   if not nodes_dirty then return end
@@ -126,7 +158,7 @@ local function node(num)
     local count, old, old_seen = 0, nil, math.huge
     for k, v in pairs(S.nodes) do
       count = count + 1
-      if (v.seen or -1) < old_seen and k ~= S.peer then old, old_seen = k, v.seen or -1 end
+      if (v.seen or -1) < old_seen and k ~= S.peer and not S.is_contact(k) then old, old_seen = k, v.seen or -1 end
     end
     if count >= MAX_NODES and old then S.nodes[old] = nil end
     n = { num = num }
@@ -230,6 +262,7 @@ function S.send_dm(hx, text)
   end
   n.key = n.key or mt.pki_key(S.priv, n.pub)
   if not n.key then push(list, "me: " .. text .. "  (bad key)", "fail"); return end
+  touch(hx)
   local line = add(list, dm_file(hx), "me: " .. text, "me")
   local base = line[1]
   line[1] = base .. "  ..."
@@ -274,6 +307,7 @@ local function on_data(h, d, n, hx, ci)
       if not (tab == 1 and S.chan_sel == ci) then S.unread_chat = (S.unread_chat or 0) + 1 end
       shell.sound("notify")
     elseif to_me then
+      touch(hx)
       add(S.dm_lines(hx), dm_file(hx), S.name_of(hx) .. ": " .. text, "them")
       if not (tab == 3 and S.peer == hx) then S.unread[hx] = (S.unread[hx] or 0) + 1 end
       shell.sound("notify")
@@ -390,6 +424,7 @@ end
 local MODS = { nil, "mesh/nodes", nil, "mesh/setup" }
 
 function S.set_tab(i)
+  if i == 3 then build_contacts() end
   if tabmod then
     if tabmod.close then tabmod.close() end
     unload(MODS[tab])
@@ -406,6 +441,7 @@ end
 function S.open_dm(hx)
   S.peer = hx
   S.unread[hx] = nil
+  cfg.set("mesh_peer", hx)
   S.set_tab(3)
 end
 
@@ -430,6 +466,9 @@ function app.init()
   S.pos_mode = math.max(1, math.min(3, tonumber(cfg.get("mesh_pos")) or 1))
   S.preset = mt.PRESETS[S.preset_i]
   load_channels()
+  for hx in (sys.read_text(DIR .. "/contacts.txt") or ""):gmatch("%x+") do S.contacts[#S.contacts + 1] = hx end
+  local last = cfg.get("mesh_peer")
+  if last and S.is_contact(last) then S.peer = last end  -- the DMs tab opens where you left it
   S.start_radio()
   if gps then pcall(gps.start) end
 end
@@ -477,6 +516,7 @@ function app.update(dt)
   end
 
   if tab == 1 then S.unread_chat = nil end
+  if tab == 3 and not S.peer and math.floor(S.now) ~= math.floor(S.now - dt) then build_contacts() end
   local dm = 0
   for _, c in pairs(S.unread) do dm = dm + c end
   TABS[1] = S.unread_chat and ("Chat " .. S.unread_chat) or "Chat"
@@ -515,11 +555,13 @@ function app.draw()
     ui.footer(#S.channels > 1 and { { "Enter", "Send" }, { "<>", "Channel" }, { "Tab", "Nodes" } }
       or { { "Enter", "Send all" }, { "Tab", "Nodes" }, { "Esc", "Back" } })
   elseif not S.peer then
-    ui.empty("antenna", "No conversation open", "Pick a node in Nodes, Enter")
-    ui.footer({ { "Tab", "Setup" }, { "Esc", "Back" } })
+    if #crows == 0 then ui.empty("antenna", "No conversations yet", "Pick a node in Nodes, Enter")
+    else ctop = ui.list(crows, csel, ctop, 4, 33, 229, 15, 6) end
+    ui.footer(#crows > 0 and { { "Enter", "Open" }, { "X", "Remove" }, { "Tab", "Setup" } }
+      or { { "Tab", "Setup" }, { "Esc", "Back" } })
   else
     draw_lines(S.dm_lines(S.peer), S.name_of(S.peer))
-    ui.footer({ { "Enter", "Send" }, { "Tab", "Setup" }, { "Esc", "Back" } })
+    ui.footer({ { "Enter", "Send" }, { "Esc", "Contacts" }, { "Tab", "Setup" } })
   end
 end
 
@@ -558,8 +600,26 @@ function app.key(k)
     return k.key ~= "esc"
   end
   if tab == 3 then
-    if not S.peer then return k.key ~= "esc" end
+    if not S.peer then
+      local c = not k.ctrl and not k.fn and k.text and k.text:lower()
+      local hx = S.contacts[csel]
+      if d == "up" then csel = math.max(1, csel - 1)
+      elseif d == "down" then csel = math.min(#crows, csel + 1)
+      elseif k.key == "enter" and hx then S.open_dm(hx)
+      elseif c == "x" and hx then
+        shell.confirm("Remove " .. S.name_of(hx) .. "?", "From the list; the messages stay on the card.", function(yes)
+          if yes then table.remove(S.contacts, csel); save_contacts(); build_contacts() end
+        end)
+      else return k.key ~= "esc" end
+      return true
+    end
     S.unread[S.peer] = nil
+    if k.key == "esc" and input == "" then  -- back to the contact list
+      S.peer = nil
+      cfg.set("mesh_peer", nil)
+      build_contacts()
+      return true
+    end
     return type_key(k, d, function(t) S.send_dm(S.peer, t) end)
   end
   if (d == "left" or d == "right") and #S.channels > 1 then

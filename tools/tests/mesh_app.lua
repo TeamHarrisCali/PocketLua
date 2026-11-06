@@ -116,12 +116,18 @@ check(dm and dm.h.want_ack and #dm.payload == #mt.encode_data({ portnum = 1, pay
   "a DM goes out PKI-encrypted (channel 0, want_ack, tag + nonce)")
 check(shows("hi alice"), "the DM shows in the conversation")
 
+key("esc"); frames(2)
+check(shows("ALB") and shows("Contacts") == nil, "Esc in a conversation goes back to the contact list")
+key("enter"); frames(2)
+check(shows("hi alice"), "Enter on a contact reopens the conversation")
 key("tab"); frames(2)
 check(shows("Channel 1") and shows("public"), "Setup lists the public channel")
 
 shell.launch("calc"); frames(3)
 shell.launch("mesh"); frames(3)
 check(shows("ALB: hello mesh"), "chat history is back after reopening")
+key("tab"); key("tab"); frames(2)
+check(shows("hi alice"), "the DMs tab reopens the last conversation")
 shell.launch("calc"); frames(3)
 
 say(string.format("%d failure(s)", fails))
