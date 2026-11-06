@@ -26,11 +26,42 @@ static multi_heap_handle_t arena = nullptr;
 static void *arenaMem = nullptr;
 static portMUX_TYPE arenaLock = portMUX_INITIALIZER_UNLOCKED;
 
-static void *aMalloc(size_t n) { return arena ? multi_heap_malloc(arena, n) : malloc(n); }
-static void *aRealloc(void *p, size_t n) { return arena ? multi_heap_realloc(arena, p, n) : realloc(p, n); }
-static void aFree(void *p) { if (arena) multi_heap_free(arena, p); else free(p); }
-static void *arenaPage(size_t size, size_t align) { return multi_heap_aligned_alloc(arena, size, align); }
-static void arenaPageFree(void *p) { multi_heap_free(arena, p); }
+// Past the arena, an app may borrow from the shared heap while that keeps
+// OVERFLOW_RESERVE free for Wi-Fi and TLS. Apps that fit the arena never
+// touch it; one that would have run out of memory gets the RAM nothing else
+// is using.
+static const size_t OVERFLOW_RESERVE = 24 * 1024;
+static bool inArenaMem(const void *p) {
+  return arena && p >= arenaMem && (const char *)p < (const char *)arenaMem + ARENA_SIZE;
+}
+static bool heapHasRoom(size_t n) { return heap_caps_get_free_size(MALLOC_CAP_8BIT) >= n + OVERFLOW_RESERVE; }
+
+static void *aMalloc(size_t n) {
+  if (!arena) return malloc(n);
+  void *p = multi_heap_malloc(arena, n);
+  return p || !heapHasRoom(n) ? p : heap_caps_malloc(n, MALLOC_CAP_8BIT);
+}
+static void aFree(void *p) { if (inArenaMem(p)) multi_heap_free(arena, p); else free(p); }
+static void *aRealloc(void *p, size_t osize, size_t n) {
+  if (!arena) return realloc(p, n);
+  if (inArenaMem(p)) {
+    void *q = multi_heap_realloc(arena, p, n);
+    if (q || !heapHasRoom(n)) return q;
+  } else if (n <= osize || heapHasRoom(n - osize)) {
+    void *q = heap_caps_realloc(p, n, MALLOC_CAP_8BIT);
+    if (q) return q;
+  }
+  void *q = aMalloc(n);  // move it: arena, or heap with room
+  if (!q) return nullptr;
+  memcpy(q, p, osize < n ? osize : n);
+  aFree(p);
+  return q;
+}
+static void *arenaPage(size_t size, size_t align) {
+  void *p = multi_heap_aligned_alloc(arena, size, align);
+  return p || !heapHasRoom(size) ? p : heap_caps_aligned_alloc(align, size, MALLOC_CAP_8BIT);
+}
+static void arenaPageFree(void *p) { if (inArenaMem(p)) multi_heap_free(arena, p); else heap_caps_free(p); }
 
 void reserveArena() {
   if (arena) return;
@@ -111,7 +142,7 @@ static void *alloc(void *, void *ptr, size_t osize, size_t nsize) {
   } else if (oldSmall && newSmall && luapool::sameClass(osize, nsize)) {
     p = ptr;
   } else if (!oldSmall && !newSmall) {
-    p = aRealloc(ptr, nsize);
+    p = aRealloc(ptr, osize, nsize);
   } else {
     p = newSmall ? luapool::alloc(nsize) : aMalloc(nsize);
     if (p) {
