@@ -176,23 +176,6 @@ function M.decode_position(s)
     time = t[4], precision = t[23] }
 end
 
--- Telemetry: time 1, device_metrics 2 { battery_level 1, voltage 2 (float),
--- channel_utilization 3, air_util_tx 4, uptime_seconds 5 }, environment_metrics
--- 3 { temperature 1, relative_humidity 2, barometric_pressure 3 } (floats).
-function M.decode_telemetry(s)
-  local t = pb.decode(s)
-  if not t then return nil end
-  local out = {}
-  local dm = t[2] and pb.decode(t[2])
-  if dm then
-    out.battery, out.voltage, out.uptime = dm[1], pb.float(dm[2]), dm[5]
-    out.util = pb.float(dm[3])
-  end
-  local em = t[3] and pb.decode(t[3])
-  if em then out.temp, out.humidity, out.pressure = pb.float(em[1]), pb.float(em[2]), pb.float(em[3]) end
-  return out
-end
-
 -- RouteDiscovery: route 1 (node numbers towards the target), snr_towards 2
 -- (dB x4), route_back 3, snr_back 4; all packed.
 function M.decode_route(s)

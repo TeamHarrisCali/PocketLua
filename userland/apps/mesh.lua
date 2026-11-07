@@ -1,5 +1,5 @@
 -- Mesh: a Meshtastic-compatible node on the Cap LoRa-1262. Chat on the public
--- channel and private channels, see the nodes around (battery, position,
+-- channel and private channels, see the nodes around (distance, hops,
 -- traceroute), send private (public-key) messages and share a position.
 -- It joins as CLIENT_MUTE: it never relays other nodes' packets. The radio only
 -- runs while the app is open, and Wi-Fi is off meanwhile (focus mode) for the
@@ -16,7 +16,6 @@ app.help = {
   { "T", "Node: traceroute" },
   { "X", "DMs: remove contact" },
   { "M", "DMs: quiet contact" },
-  { "R", "Nodes: radar" },
   { "Esc", "Clear, then back" },
 }
 
@@ -37,7 +36,7 @@ local nodes_dirty = false
 local scroll, input, blink = 0, "", true
 local queue, waiting, traces = {}, {}, {}
 local crows, csel, ctop = {}, 1, 1  -- the DMs tab's contact list
-local gps_left, info_left, pos_left, save_left = 0, 5, 60, 30
+local gps_left, info_left, pos_left, save_left, gc_left = 0, 5, 60, 30, 15
 
 -- ---------------------------------------------------------------- helpers
 function S.hex(s) return (s:gsub(".", function(c) return string.format("%02x", c:byte()) end)) end
@@ -351,19 +350,6 @@ local function on_data(h, d, n, hx, ci)
     if pos and math.abs(pos.lat) <= 90 and math.abs(pos.lon) <= 180 and (pos.lat ~= 0 or pos.lon ~= 0) then
       n.lat, n.lon = pos.lat, pos.lon
     end
-  elseif p == mt.PORT.TELEMETRY then
-    -- kept as the lines the node page shows: a few strings, not a dozen fields per node
-    local t = mt.decode_telemetry(d.payload)
-    if t and (t.battery or t.voltage) then
-      local up = t.uptime and (t.uptime >= 86400 and (t.uptime // 86400 .. "d " .. t.uptime % 86400 // 3600 .. "h")
-        or (t.uptime // 3600 .. "h " .. t.uptime % 3600 // 60 .. "m"))
-      n.tel = "Battery " .. (t.battery and (t.battery > 100 and "on power" or t.battery .. "%") or "?")
-        .. (t.voltage and string.format(", %.2f V", t.voltage) or "") .. (up and (", up " .. up) or "")
-    end
-    if t and t.temp then
-      n.env = string.format("Temp %.1f C", t.temp)
-        .. (t.humidity and string.format(", %d%% RH", math.floor(t.humidity + 0.5)) or "")
-    end
   elseif p == mt.PORT.TRACEROUTE and to_me and d.request_id then
     local tr = traces[hx]
     local r = mt.decode_route(d.payload)
@@ -412,10 +398,7 @@ local function on_packet(pk)
       if d then ci = i end
     end
   end
-  if not d then
-    print(string.format("mesh: heard %s ch %02x, can't read it", mt.id_text(h.from), h.channel))
-    return
-  end
+  if not d then return end  -- another channel, or a key we don't have
   S.rx = S.rx + 1
   local n, hx = node(h.from)
   print(string.format("mesh: %s port %d ch %s %d dBm hops %s", mt.id_text(h.from), d.portnum, ci or "pki",
@@ -537,6 +520,21 @@ function app.update(dt)
   if info_left <= 0 then info_left = NODEINFO_EVERY; S.send_nodeinfo(nil, false) end
   if pos_left <= 0 then pos_left = send_position() and POS_EVERY or 30 end
   if save_left <= 0 then save_left = 30; save_nodes() end
+  -- The screen makes garbage every frame; on a busy mesh it piled up faster
+  -- than the incremental collector cleared it (85 -> 102 KB in a few minutes).
+  -- A full collection every 15 s keeps the peak at what is really in use.
+  gc_left = gc_left - dt
+  if gc_left <= 0 then
+    gc_left = 15
+    local before = collectgarbage("count")
+    collectgarbage("collect")
+    S.gc_n = (S.gc_n or 0) + 1
+    if S.gc_n % 4 == 0 then
+      local n = 0
+      for _ in pairs(S.nodes) do n = n + 1 end
+      print(string.format("mesh mem: %.0f KB, %.0f after collecting, %d nodes", before, collectgarbage("count"), n))
+    end
+  end
 
   for k, w in pairs(waiting) do  -- three tries for a DM without an ACK
     if S.now >= w.at then
@@ -645,7 +643,7 @@ function app.key(k)
   local d = ui.nav(k)
   if tabmod then return tabmod.key(k, d) end
   if not S.radio_ok then
-    if k.text and k.text:lower() == "r" and not k.fn and tab ~= 2 then
+    if k.text and k.text:lower() == "r" and not k.fn then
       S.start_radio()
       shell.toast(S.radio_ok and "Radio ready" or tostring(S.radio_err))
       return true

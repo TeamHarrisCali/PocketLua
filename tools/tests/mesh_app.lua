@@ -86,12 +86,12 @@ end
 check(info and info.role == mt.ROLE_CLIENT_MUTE and info.hw_model == mt.HW_PRIVATE and info.public_key
   and #info.public_key == 32, "announces itself: NodeInfo with role, hardware and public key")
 
-local t = pb.encode({ { 2, "bytes", pb.encode({ { 1, "uint", 87 }, { 5, "uint", 7200 } }) } })
-hear(ALICE, { portnum = mt.PORT.TELEMETRY, payload = t }, { hops = 1 })
+hear(ALICE, { portnum = mt.PORT.POSITION, payload = mt.encode_position({ lat = 37.78, lon = -122.41 }) }, { hops = 1 })
 key("tab"); frames(2)
 check(shows("ALB"), "Nodes lists Alice")
 key("enter"); frames(2)
-check(shows("Battery 87%%"), "node page shows battery from telemetry")
+check(shows("1.4km NE"), "node page shows distance and direction from their position")
+check(not shows("Battery"), "no telemetry is kept")
 check(shows("1 hop"), "node page shows hops")
 hw_calls = {}
 key("t"); secs(1)
@@ -142,15 +142,7 @@ key("tab"); key("tab"); frames(2)
 check(shows("hi alice"), "the DMs tab reopens the last conversation")
 local ME2 = ME
 
--- radar: Alice shares a position about 1.4 km NE of our GPS fix (37.77, -122.42)
-hear(ALICE, { portnum = mt.PORT.POSITION, payload = mt.encode_position({ lat = 37.78, lon = -122.41 }) })
-key("tab", { shift = true }); frames(2)
-key("r"); secs(1.2)
-check(shows("ALB 1.4km NE"), "the radar picks Alice with distance and direction")
-key("r"); frames(1)
-
 -- quiet: M in the contact list silences a contact
-key("tab"); frames(2)
 key("esc"); frames(2)
 local snd0, dings = shell.sound, 0
 shell.sound = function(k, ...) if k == "notify" then dings = dings + 1 end return snd0(k, ...) end

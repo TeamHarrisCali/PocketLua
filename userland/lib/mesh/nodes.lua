@@ -1,6 +1,6 @@
--- Mesh > Nodes: who's around (newest first) or a radar of them around our GPS
--- position, and a page per node with signal, hops, battery and telemetry,
--- position and distance, and a traceroute.
+-- Mesh > Nodes: who's around (newest first) and a page per node with signal,
+-- hops, distance and direction (from their position and our GPS), and a
+-- traceroute.
 -- Loaded while the tab is open (see apps/mesh.lua for S).
 return function(S)
 local col = ui.col
@@ -8,62 +8,6 @@ local geo = require("geo_math")
 local rows, sel, top = {}, 1, 1
 local detail, lines = nil, {}  -- the node shown (hex) and its wrapped text
 local refresh = 0
-local radar, plots, psel = false, {}, 1  -- radar view: { hx, dist, bearing }, the picked one
-
-local NICE = { 1, 2, 5 }
-local function nice_range(d)  -- the smallest 1/2/5 x 10^n metres at or above d
-  local p = 100
-  while true do
-    for _, m in ipairs(NICE) do if m * p >= d then return m * p end end
-    p = p * 10
-  end
-end
-
-local function build_radar()
-  plots = {}
-  if not S.fix then return end
-  for hx, n in pairs(S.nodes) do
-    if n.lat and hx ~= S.me_hex then
-      plots[#plots + 1] = { hx, geo.dist(S.fix.lat, S.fix.lon, n.lat, n.lon), geo.bearing(S.fix.lat, S.fix.lon, n.lat, n.lon) }
-    end
-  end
-  table.sort(plots, function(a, b) return a[2] < b[2] end)
-  psel = math.max(1, math.min(psel, #plots))
-end
-
-local function draw_radar()
-  if not S.fix then
-    ui.empty("antenna", "The radar needs a GPS fix", "Cap attached, sky in view")
-    ui.footer({ { "R", "List" }, { "Tab", "DMs" }, { "Esc", "Back" } })
-    return
-  end
-  local cx, cy, R = 120, 70, 36
-  local far = 0
-  for _, p in ipairs(plots) do far = math.max(far, p[2]) end
-  local range = nice_range(math.max(far, 100))
-  gfx.circle(cx, cy, R, col.line)
-  gfx.circle(cx, cy, R // 2, col.line)
-  gfx.line(cx, cy - R - 2, cx, cy + R + 2, col.line)
-  gfx.line(cx - R - 2, cy, cx + R + 2, cy, col.line)
-  ui.text(cx - 2, cy - R - 11, "N", col.muted)
-  ui.text(cx + R + 4, cy - 4, geo.fmt_dist(range), col.muted)
-  gfx.disc(cx, cy, 2, col.accent)
-  for i, p in ipairs(plots) do
-    local r, b = p[2] / range * R, math.rad(p[3])
-    local x, y = math.floor(cx + r * math.sin(b) + 0.5), math.floor(cy - r * math.cos(b) + 0.5)
-    local pick = i == psel
-    gfx.disc(x, y, pick and 3 or 2, pick and col.accent or col.text)
-    ui.text(x + 4, y - 3, S.name_of(p[1]), pick and col.accent or col.muted)
-  end
-  local p = plots[psel]
-  if p then
-    ui.text(4, 33, ui.fit(S.name_of(p[1]) .. " " .. geo.fmt_dist(p[2]) .. " " .. geo.compass(p[3]), 80), col.text)
-  else
-    ui.text(4, 33, "No positions yet", col.muted)
-  end
-  ui.footer({ { "<>", "Pick" }, { "Enter", "Details" }, { "R", "List" } })
-end
-
 local function ago(t)
   local s = math.floor(S.now - t)
   if s < 60 then return s .. "s" elseif s < 3600 then return (s // 60) .. "m" end
@@ -98,8 +42,6 @@ local function build_detail()
   else
     t[#t + 1] = "Not heard since Mesh opened"
   end
-  if n.tel then t[#t + 1] = n.tel end
-  if n.env then t[#t + 1] = n.env end
   if n.lat then
     local where = string.format("At %.4f, %.4f", n.lat, n.lon)
     if S.fix then
@@ -125,7 +67,7 @@ function tab.update(dt)
   refresh = refresh - dt
   if refresh <= 0 then
     refresh = 1
-    if detail then build_detail() elseif radar then build_radar() else build_list() end
+    if detail then build_detail() else build_list() end
   end
 end
 
@@ -135,10 +77,9 @@ function tab.draw()
     ui.footer({ { "Enter", "Message" }, { "T", "Traceroute" }, { "Esc", "Back" } })
     return
   end
-  if radar then draw_radar(); return end
   if #rows == 0 then ui.empty("antenna", "No nodes heard yet", "They appear as they send")
   else top = ui.list(rows, sel, top, 4, 33, 229, 15, 6) end
-  ui.footer({ { "Enter", "Details" }, { "R", "Radar" }, { "Tab", "DMs" } })
+  ui.footer({ { "Enter", "Details" }, { "Tab", "DMs" }, { "Esc", "Back" } })
 end
 
 function tab.key(k, d)
@@ -147,19 +88,6 @@ function tab.key(k, d)
     if k.key == "esc" then detail = nil; build_list()
     elseif k.key == "enter" then S.open_dm(detail)
     elseif c == "t" then S.traceroute(detail); build_detail()
-    else return false end
-    return true
-  end
-  if c == "r" then
-    radar = not radar
-    if radar then build_radar() else build_list() end
-    return true
-  end
-  if radar then
-    if d == "left" or d == "up" then psel = math.max(1, psel - 1)
-    elseif d == "right" or d == "down" then psel = math.min(math.max(1, #plots), psel + 1)
-    elseif k.key == "enter" and plots[psel] then detail = plots[psel][1]; build_detail()
-    elseif k.key == "esc" then radar = false; build_list()
     else return false end
     return true
   end

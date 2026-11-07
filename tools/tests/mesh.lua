@@ -139,13 +139,6 @@ local pc = mt.decode_position(mt.encode_position({ lat = 37.7749295, lon = -122.
 check(pc and pc.precision == 13 and math.abs(pc.lon + 122.4194155) < 0.03 and math.abs(pc.lon + 122.4194155) > 1e-3,
   "Position at 13 bits is blurred to a ~5 km cell")
 check(mt.decode_routing(mt.ACK_PAYLOAD).error == 0, "ACK is Routing error NONE")
-local f32 = function(x) return string.unpack("<I4", string.pack("<f", x)) end
-local tel = mt.decode_telemetry(pb.encode({ { 1, "fixed32", 1790000000 }, { 2, "bytes", pb.encode({
-  { 1, "uint", 87 }, { 2, "fixed32", f32(4.05) }, { 3, "fixed32", f32(12.5) }, { 5, "uint", 3600 } }) } }))
-check(tel and tel.battery == 87 and math.abs(tel.voltage - 4.05) < 1e-4 and tel.uptime == 3600
-  and math.abs(tel.util - 12.5) < 1e-4, "Telemetry: battery, voltage, utilisation, uptime")
-local env = mt.decode_telemetry(pb.encode({ { 3, "bytes", pb.encode({ { 1, "fixed32", f32(21.5) } }) } }))
-check(env and math.abs(env.temp - 21.5) < 1e-4 and env.battery == nil, "Telemetry: environment temperature")
 local snr = pb.encode({ { 1, "int", -24 } }):sub(2) .. pb.encode({ { 1, "int", 40 } }):sub(2)
 local rt = mt.decode_route(pb.encode({ { 1, "bytes", string.pack("<I4I4", 0x11, 0xa1b2c3d4) }, { 2, "bytes", snr },
   { 3, "bytes", string.pack("<I4", 0x22) } }))
