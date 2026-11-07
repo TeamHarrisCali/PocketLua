@@ -139,7 +139,7 @@ local function dm_quiet(hx)
   return S.listed("mesh_mute_dm", hx) or (not S.is_contact(hx) and cfg.get("mesh_dm_new") == "0")
 end
 local importing = false
-local function ding(quiet) if not quiet and not importing then shell.sound("notify") end end
+local function ding(quiet) if not quiet and not importing then shell.sound("mesh") end end
 
 local function build_contacts()
   crows = {}

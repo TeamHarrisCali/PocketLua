@@ -146,7 +146,7 @@ key("enter"); frames(2)
 check(shows("hi alice"), "Enter on a contact reopens the conversation")
 key("tab"); frames(2)
 check(shows("Listen when closed"), "Setup has the background listener switch")
-for _ = 1, 6 do key("down") end
+for _ = 1, 7 do key("down") end
 frames(1)
 check(shows("DMs from new people"), "Setup has the DM sound row")
 check(shows("Channel 1") and shows("public"), "Setup lists the public channel")
@@ -161,7 +161,7 @@ local ME2 = ME
 -- quiet: M in the contact list silences a contact
 key("esc"); frames(2)
 local snd0, dings = shell.sound, 0
-shell.sound = function(k, ...) if k == "notify" then dings = dings + 1 end return snd0(k, ...) end
+shell.sound = function(k, ...) if k == "mesh" then dings = dings + 1 end return snd0(k, ...) end
 local function dm_from(from, text)  -- PKI with the stand-in crypto: Data, tag, extra nonce
   local h = { to = ME2, from = from, id = mt.new_id(), hop_limit = 3, hop_start = 3, channel = 0 }
   queue[#queue + 1] = { data = mt.pack(h, mt.encode_data({ portnum = 1, payload = text }) .. string.rep("\0", 12)),

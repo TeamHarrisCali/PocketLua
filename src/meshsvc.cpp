@@ -236,7 +236,7 @@ void onPacket(const uint8_t *b, size_t n, float rssi, float snr) {
     text = "Open Mesh to read it";
   }
   usbdev::log("mesh listener: DM from !" + hx + (parsed ? "" : " (not readable here)") + (quiet ? ", quiet" : ""));
-  systemNotify("Mesh: " + who, text, quiet ? "none" : "notify");
+  systemNotify("Mesh: " + who, text, quiet ? "none" : "mesh");
 }
 
 }  // namespace

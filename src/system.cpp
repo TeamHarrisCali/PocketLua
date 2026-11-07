@@ -86,21 +86,28 @@ static const Note S_LOW[] = {{784, 120}, {523, 200}, {0, 0}};
 static const Note S_ALARM[] = {{1760, 150}, {1, 100}, {1760, 150}, {1, 100}, {1760, 150}, {1, 400}, {0, 0}};
 static const Note *tune = nullptr;
 static float tuneLeft = 0;
-static bool tuneQuiet = false;  // the boot chime plays at a quarter of the volume
+static bool tuneQuiet = false;  // a tune playing below the volume: the boot chime, Mesh alerts
 
-static void tuneVolume(bool quiet) {
+// The volume while a tune plays, as a share of the set one (100 = as set).
+static void tuneVolume(int pct, int floor = 12) {
   int v = cget("vol", "100").toInt();
-  hwSetVolume(quiet ? max(v / 4, 12) : v);
-  tuneQuiet = quiet;
+  hwSetVolume(pct >= 100 || v == 0 ? v : max(v * pct / 100, min(floor, v)));
+  tuneQuiet = pct < 100;
 }
 
+// "mesh" is the notify tune at Mesh's own share of the volume (cfg mesh_vol,
+// percent; 0 = silent), so its alerts can be quieter than everything else.
 static void sound(const char *kind, bool force = false) {
   if (!force && cget("sounds") == "0") return;
-  if (tuneQuiet) tuneVolume(false);
-  tune = !strcmp(kind, "boot") ? S_BOOT : !strcmp(kind, "notify") ? S_NOTIFY : !strcmp(kind, "error") ? S_ERROR
+  if (tuneQuiet) tuneVolume(100);
+  bool mesh = !strcmp(kind, "mesh");
+  int meshPct = mesh ? cget("mesh_vol", "25").toInt() : 100;
+  if (mesh && meshPct <= 0) return;
+  tune = !strcmp(kind, "boot") ? S_BOOT : !strcmp(kind, "notify") || mesh ? S_NOTIFY : !strcmp(kind, "error") ? S_ERROR
        : !strcmp(kind, "low") ? S_LOW : !strcmp(kind, "alarm") ? S_ALARM : nullptr;
   tuneLeft = 0;
-  if (tune == S_BOOT) tuneVolume(true);
+  if (tune == S_BOOT) tuneVolume(25);
+  else if (mesh && meshPct < 100) tuneVolume(meshPct, 4);
 }
 
 static void soundTick(float dt) {
@@ -109,7 +116,7 @@ static void soundTick(float dt) {
   if (tuneLeft > 0) return;
   if (!tune->ms) {
     tune = nullptr;
-    if (tuneQuiet) tuneVolume(false);
+    if (tuneQuiet) tuneVolume(100);
     return;
   }
   if (tune->f > 1) playTone(tune->f, tune->ms);
