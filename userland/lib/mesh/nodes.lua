@@ -70,11 +70,6 @@ local function ago(t)
   return (s // 3600) .. "h"
 end
 
-local function span(s)
-  if s >= 86400 then return (s // 86400) .. "d " .. (s % 86400 // 3600) .. "h" end
-  return (s // 3600) .. "h " .. (s % 3600 // 60) .. "m"
-end
-
 local function build_list()
   rows = {}
   local list = {}
@@ -103,11 +98,8 @@ local function build_detail()
   else
     t[#t + 1] = "Not heard since Mesh opened"
   end
-  if n.battery or n.voltage then
-    t[#t + 1] = "Battery " .. (n.battery and (n.battery > 100 and "on power" or n.battery .. "%") or "?")
-      .. (n.voltage and string.format(", %.2f V", n.voltage) or "") .. (n.uptime and (", up " .. span(n.uptime)) or "")
-  end
-  if n.temp then t[#t + 1] = string.format("Temp %.1f C%s", n.temp, n.humidity and string.format(", %d%% RH", math.floor(n.humidity + 0.5)) or "") end
+  if n.tel then t[#t + 1] = n.tel end
+  if n.env then t[#t + 1] = n.env end
   if n.lat then
     local where = string.format("At %.4f, %.4f", n.lat, n.lon)
     if S.fix then

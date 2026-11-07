@@ -25,14 +25,14 @@ local pb = require("protobuf")
 
 local TABS = { "Chat", "Nodes", "DMs", "Setup" }
 local DIR = "data/mesh"
-local MAX_LINES, MAX_NODES, KEEP, ROWS = 40, 40, 40, 7
+local MAX_LINES, MAX_NODES, KEEP, ROWS = 40, 30, 40, 7  -- a node costs ~0.5 KB, so 30 of them
 local NODEINFO_EVERY, POS_EVERY = 3 * 3600, 15 * 60
 
 -- S is what the tab modules share with the core
 local S = { mt = mt, pb = pb, nodes = {}, channels = {}, chat = {}, dms = {}, unread = {}, contacts = {}, chan_sel = 1,
   now = 0, tx = 0, rx = 0, pos_mode = 1, preset_i = 1, radio_ok = false }
 local tab, tabmod = 1, nil
-local hist = mt.history(120)
+local hist = mt.history(64)  -- (from, id) of recent packets: we never relay, so a short memory does
 local nodes_dirty = false
 local scroll, input, blink = 0, "", true
 local queue, waiting, traces = {}, {}, {}
@@ -349,11 +349,21 @@ local function on_data(h, d, n, hx, ci)
   elseif p == mt.PORT.POSITION then
     local pos = mt.decode_position(d.payload)
     if pos and math.abs(pos.lat) <= 90 and math.abs(pos.lon) <= 180 and (pos.lat ~= 0 or pos.lon ~= 0) then
-      n.lat, n.lon, n.alt, n.pos_at = pos.lat, pos.lon, pos.alt, S.now
+      n.lat, n.lon = pos.lat, pos.lon
     end
   elseif p == mt.PORT.TELEMETRY then
+    -- kept as the lines the node page shows: a few strings, not a dozen fields per node
     local t = mt.decode_telemetry(d.payload)
-    if t then for k, v in pairs(t) do n[k] = v end end
+    if t and (t.battery or t.voltage) then
+      local up = t.uptime and (t.uptime >= 86400 and (t.uptime // 86400 .. "d " .. t.uptime % 86400 // 3600 .. "h")
+        or (t.uptime // 3600 .. "h " .. t.uptime % 3600 // 60 .. "m"))
+      n.tel = "Battery " .. (t.battery and (t.battery > 100 and "on power" or t.battery .. "%") or "?")
+        .. (t.voltage and string.format(", %.2f V", t.voltage) or "") .. (up and (", up " .. up) or "")
+    end
+    if t and t.temp then
+      n.env = string.format("Temp %.1f C", t.temp)
+        .. (t.humidity and string.format(", %d%% RH", math.floor(t.humidity + 0.5)) or "")
+    end
   elseif p == mt.PORT.TRACEROUTE and to_me and d.request_id then
     local tr = traces[hx]
     local r = mt.decode_route(d.payload)
