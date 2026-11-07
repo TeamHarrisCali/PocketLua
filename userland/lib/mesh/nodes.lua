@@ -50,7 +50,8 @@ local function build_detail()
     end
     t[#t + 1] = where
   end
-  t[#t + 1] = n.pub and "Key known: DMs are encrypted" or "No key yet: DMs ask for it first"
+  t[#t + 1] = n.pub and "Key known: DMs are encrypted"
+    or (n.info_at and S.now - n.info_at < 600 and "Asking for their key..." or "No key yet")
   if n.trace then t[#t + 1] = "Route: " .. n.trace end
   lines = {}
   for _, s in ipairs(t) do
@@ -93,7 +94,10 @@ function tab.key(k, d)
   end
   if d == "up" then sel = math.max(1, sel - 1)
   elseif d == "down" then sel = math.min(#rows, sel + 1)
-  elseif k.key == "enter" and rows[sel] then detail = rows[sel].hex; build_detail()
+  elseif k.key == "enter" and rows[sel] then
+    detail = rows[sel].hex
+    S.ask_key(detail, true)  -- opening a keyless node's page asks for its key
+    build_detail()
   else return false end
   return true
 end

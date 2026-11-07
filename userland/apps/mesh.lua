@@ -255,6 +255,19 @@ function S.send_nodeinfo(to, want_response)
   S.send_channel(1, to or mt.BROADCAST, { portnum = mt.PORT.NODEINFO, payload = my_user(), want_response = want_response })
 end
 function S.announce() info_left = 2 end
+
+-- Keys travel in NodeInfo. A node we hear without one gets ours with "send
+-- yours back" (as Meshtastic firmware does on first contact): at most every
+-- 10 minutes per node and one every 30 s in all, to spare the channel.
+local last_ask = -1e9
+function S.ask_key(hx, now_please)
+  local n = S.nodes[hx]
+  if not n or n.pub then return false end
+  if S.now - (n.info_at or -1e9) < 600 or (not now_please and S.now - last_ask < 30) then return false end
+  n.info_at, last_ask = S.now, S.now
+  S.send_nodeinfo(n.num, true)
+  return true
+end
 function S.position_soon() pos_left = 3 end
 
 local function send_position()  -- false when there is nothing to send yet
@@ -298,6 +311,7 @@ function S.traceroute(hx)
   if traces[hx] and S.now - traces[hx].at < 30 then shell.toast("Wait 30 s between traceroutes"); return end
   local id = S.send_channel(1, n.num, { portnum = mt.PORT.TRACEROUTE, payload = "", want_response = true })
   traces[hx] = { id = id, at = S.now }
+  S.ask_key(hx, true)
   n.trace = "waiting for a reply..."
   shell.toast("Traceroute sent")
 end
@@ -403,14 +417,10 @@ local function on_packet(pk)
   local n, hx = node(h.from)
   print(string.format("mesh: %s port %d ch %s %d dBm hops %s", mt.id_text(h.from), d.portnum, ci or "pki",
     math.floor(tonumber(pk.rssi) or 0), h.hop_start > 0 and (h.hop_start - h.hop_limit) or "?"))
-  local first = not n.long and not n.short
   n.rssi, n.snr, n.seen = tonumber(pk.rssi) or 0, tonumber(pk.snr) or 0, S.now
   n.hops = h.hop_start > 0 and (h.hop_start - h.hop_limit) or nil
   on_data(h, d, n, hx, ci)
-  if first and d.portnum ~= mt.PORT.NODEINFO and S.now - (n.info_at or -1e9) > 600 then
-    n.info_at = S.now
-    S.send_nodeinfo(h.from, true)  -- swap names and keys with a node we haven't met
-  end
+  S.ask_key(hx)  -- no key yet (and its NodeInfo didn't bring one): swap NodeInfo
 end
 
 -- ---------------------------------------------------------------- radio

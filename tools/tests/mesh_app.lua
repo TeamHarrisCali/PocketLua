@@ -76,6 +76,16 @@ hear(ALICE, { portnum = mt.PORT.TEXT, payload = "hello mesh" })
 check(shows("ALB: hello mesh"), "a public message shows with the sender's short name")
 hear(0x55667788, { portnum = mt.PORT.TEXT, payload = "other channel" }, { ch = 0x3d })
 check(not shows("other channel"), "a channel we don't have is ignored")
+hw_calls = {}
+hear(0x77778888, { portnum = mt.PORT.POSITION, payload = mt.encode_position({ lat = 37.7, lon = -122.4 }) })
+secs(1)
+local asked
+for _, c in ipairs(calls("lora_send")) do
+  local h2, p2 = mt.unpack(c[2])
+  local d2 = mt.decode_data(p2)
+  if d2 and d2.portnum == mt.PORT.NODEINFO and mt.same(h2.to, 0x77778888) and d2.want_response then asked = true end
+end
+check(asked, "a node heard without a key is sent our NodeInfo asking for theirs")
 
 secs(6)
 local info
