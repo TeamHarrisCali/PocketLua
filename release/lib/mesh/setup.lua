@@ -5,6 +5,7 @@
 return function(S)
 local col = ui.col
 local POS_MODES = { "Off", "Approx", "Precise" }
+local VOLS = { 0, 10, 25, 50, 100 }  -- Mesh alerts, percent of the volume (cfg mesh_vol)
 local rows, sel, top = {}, 1, 1
 local refresh = 0
 
@@ -51,6 +52,8 @@ local function build()
     { label = "Share position", value = POS_MODES[S.pos_mode] },
     { label = "Listen when closed", value = cfg.get("mesh_bg") == "1" and "On" or "Off", bg = true },
     { label = "DMs from new people", value = cfg.get("mesh_dm_new") == "0" and "Quiet" or "Sound", dmnew = true },
+    { label = "Alert volume", value = (function(v) return v == 0 and "Off" or v .. "%" end)(tonumber(cfg.get("mesh_vol")) or 25),
+      vol = true },
   }
   for i = 1, #S.channels do
     local quiet = S.listed("mesh_mute_ch", S.chan_name(i))
@@ -134,6 +137,14 @@ local function change(r, d)
     local on = cfg.get("mesh_bg") ~= "1"
     cfg.set("mesh_bg", on and "1" or "0")
     shell.toast(on and "Mesh listens for DMs while closed" or "Mesh listens only while open", 2)
+  elseif r.vol then
+    local cur, i = tonumber(cfg.get("mesh_vol")) or 25, 1
+    for j, v in ipairs(VOLS) do if v == cur then i = j end end
+    local v = VOLS[(i - 1 + d) % #VOLS + 1]
+    cfg.set("mesh_vol", tostring(v))
+    if v > 0 then shell.sound("mesh") end  -- hear what it sounds like
+    build()
+    return
   elseif r.dmnew then
     local quiet = cfg.get("mesh_dm_new") ~= "0"
     cfg.set("mesh_dm_new", quiet and "0" or nil)
@@ -164,7 +175,7 @@ function tab.key(k, d)
   if d == "up" then sel = math.max(1, sel - 1)
   elseif d == "down" then sel = math.min(#rows, sel + 1)
   elseif (k.key == "enter" or d == "right") and rows[sel] then change(rows[sel], 1)
-  elseif d == "left" and sel <= 4 then change(rows[sel], -1)
+  elseif d == "left" and (sel <= 4 or (rows[sel] and rows[sel].vol)) then change(rows[sel], -1)
   else return false end
   return true
 end
