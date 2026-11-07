@@ -125,6 +125,12 @@ for _, s in ipairs(sent()) do if mt.same(s.h.to, ALICE) and s.h.channel == 0 the
 check(dm and dm.h.want_ack and #dm.payload == #mt.encode_data({ portnum = 1, payload = "hi alice" }) + 12,
   "a DM goes out PKI-encrypted (channel 0, want_ack, tag + nonce)")
 check(shows("hi alice"), "the DM shows in the conversation")
+type_text("ok "); key("e", { ctrl = true }); key("enter"); frames(1)
+check(shows("> ok \xF0\x9F\x91\x8D"), "Ctrl+E adds an emoji to the message")
+check(shows("^7/221$"), "the counter shows bytes used of a DM's 221 (an emoji is 4)")
+key("backspace"); frames(1)
+check(shows("^3/221$"), "backspace removes the whole emoji")
+key("backspace"); key("backspace"); key("backspace"); frames(1)
 check(not shows("ok$"), "no status text after the message")
 local ticks = 0
 local line0 = gfx.line

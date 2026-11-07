@@ -228,7 +228,10 @@ void onPacket(const uint8_t *b, size_t n, float rssi, float snr) {
   bool quiet = listHas(cfgGet("mesh_mute_dm"), hx) || (!contact && cfgGet("mesh_dm_new", "1") == "0");
   String text;
   if (parsed) {
-    for (size_t i = 0; i < payLen && text.length() < 80; i++) text += (pay[i] >= 32 && pay[i] < 127) ? (char)pay[i] : '?';
+    for (size_t i = 0; i < payLen; i++) {  // UTF-8 kept (emoji draw), cut before a character that won't fit
+      if (text.length() >= 80 && (pay[i] & 0xC0) != 0x80) break;
+      if (pay[i] >= 32 && pay[i] != 127) text += (char)pay[i];
+    }
   } else {
     text = "Open Mesh to read it";
   }

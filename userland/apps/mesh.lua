@@ -16,6 +16,7 @@ app.help = {
   { "T", "Node: traceroute" },
   { "X", "DMs: remove contact" },
   { "M", "DMs: quiet contact" },
+  { "Ctrl+E", "Emoji" },
   { "Esc", "Clear, then back" },
 }
 
@@ -41,8 +42,8 @@ local gps_left, info_left, pos_left, save_left, gc_left = 0, 5, 60, 30, 15
 -- ---------------------------------------------------------------- helpers
 function S.hex(s) return (s:gsub(".", function(c) return string.format("%02x", c:byte()) end)) end
 function S.unhex(s) return (s:gsub("%x%x", function(h) return string.char(tonumber(h, 16)) end)) end
-function S.clean(s)  -- UTF-8 (emoji) to "?", no control characters
-  return (s:gsub("[\xC0-\xFF][\x80-\xBF]*", "?"):gsub("[^\32-\126]", ""))
+function S.clean(s)  -- no control characters; UTF-8 (emoji) stays: the system draws it
+  return (s:gsub("%c", ""))
 end
 
 function S.name_of(hx)
@@ -579,6 +580,11 @@ local function kind_col(kind)
   return col.text
 end
 
+-- Text limits in bytes (an emoji is 3-4): a channel packet carries 239
+-- encrypted bytes and Data.payload at most 233; a DM loses 12 to the PKI tag
+-- and nonce. Data's framing around the text is 6 bytes.
+local function limit() return tab == 3 and 221 or 233 end
+
 local function draw_lines(list, label)
   local last = #list - scroll
   for i = 0, ROWS - 1 do
@@ -598,9 +604,15 @@ local function draw_lines(list, label)
   end
   if scroll > 0 then ui.right(236, 33, "^" .. scroll, col.muted) end
   gfx.line(4, 107, 236, 107, col.line)
-  local shown = #input > 26 and input:sub(-26) or input
+  local shown = input
+  while gfx.text_w(shown) > 150 do shown = shown:gsub("^[%z\1-\127\194-\244][\128-\191]*", "") end
   ui.text(4, 112, "> " .. shown .. (blink and "_" or ""), col.text)
-  ui.right(236, 112, ui.fit(label, 70), col.muted)
+  if #input == 0 then
+    ui.right(236, 112, ui.fit(label, 70), col.muted)
+  else  -- bytes used of what a packet can carry
+    local n, max = #input, limit()
+    ui.right(236, 112, n .. "/" .. max, n > max - 20 and col.warn or col.muted)
+  end
 end
 
 function app.draw()
@@ -613,8 +625,8 @@ function app.draw()
   end
   if tab == 1 then
     draw_lines(S.chat_lines(S.chan_sel), S.chan_name(S.chan_sel))
-    ui.footer(#S.channels > 1 and { { "Enter", "Send" }, { "<>", "Channel" }, { "Tab", "Nodes" } }
-      or { { "Enter", "Send all" }, { "Tab", "Nodes" }, { "Esc", "Back" } })
+    ui.footer(#S.channels > 1 and { { "Enter", "Send" }, { "^E", "Emoji" }, { "<>", "Channel" }, { "Tab", "Nodes" } }
+      or { { "Enter", "Send all" }, { "^E", "Emoji" }, { "Tab", "Nodes" }, { "Esc", "Back" } })
   elseif not S.peer then
     if #crows == 0 then ui.empty("antenna", "No conversations yet", "Pick a node in Nodes, Enter")
     else ctop = ui.list(crows, csel, ctop, 4, 33, 229, 15, 6) end
@@ -622,23 +634,28 @@ function app.draw()
       or { { "Tab", "Setup" }, { "Esc", "Back" } })
   else
     draw_lines(S.dm_lines(S.peer), S.name_of(S.peer))
-    ui.footer({ { "Enter", "Send" }, { "Esc", "Contacts" }, { "Tab", "Setup" } })
+    ui.footer({ { "Enter", "Send" }, { "^E", "Emoji" }, { "Esc", "Contacts" }, { "Tab", "Setup" } })
   end
 end
 
 local function type_key(k, d, on_send)
   if k.key == "enter" then
     local t = S.clean(input):match("^%s*(.-)%s*$")
-    if t ~= "" then on_send(t:sub(1, 200)) end
+    if t ~= "" then on_send(t) end
     input = ""
-  elseif k.key == "backspace" then input = input:sub(1, -2)
+  elseif k.key == "backspace" then input = input:gsub("[%z\1-\127\194-\244][\128-\191]*$", "")
+  elseif k.ctrl and k.text and k.text:lower() == "e" then
+    shell.emoji(function(e)
+      if e and #input + #e <= limit() then input = input .. e
+      elseif e then shell.toast("No room for more: " .. limit() .. " bytes") end
+    end)
   elseif k.key == "esc" then
     if input == "" then return false end
     input = ""
   elseif d == "up" then scroll = scroll + 1
   elseif d == "down" then scroll = math.max(0, scroll - 1)
   elseif k.text and not k.ctrl and not k.fn then
-    if #input < 200 then input = input .. k.text end
+    if #input + #k.text <= limit() then input = input .. k.text end
   else
     return false
   end

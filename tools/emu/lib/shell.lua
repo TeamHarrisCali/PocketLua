@@ -217,6 +217,7 @@ function shell.prompt(title, default, cb, opts)
 end
 -- items: array of strings. cb(index) or cb(nil) when cancelled.
 function shell.menu(title, items, cb) modal = { kind = "menu", title = title, items = items, sel = 1, cb = cb } end
+function shell.emoji(cb) modal = { kind = "emoji", cb = cb } end
 
 local function close_modal() modal = nil end
 
