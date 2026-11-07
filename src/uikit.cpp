@@ -1,6 +1,7 @@
 #include "uikit.h"
 #include <M5Cardputer.h>
 #include "icons.gen.h"
+#include "emoji.gen.h"
 
 extern M5Canvas canvas;
 extern int g_bandY;
@@ -84,30 +85,114 @@ void line(int x0, int y0, int x1, int y1, uint16_t c) { canvas.drawLine(x0, y0 -
 void disc(int x, int y, int r, uint16_t c) { canvas.fillCircle(x, y - g_bandY, r, c); }
 void circle(int x, int y, int r, uint16_t c) { canvas.drawCircle(x, y - g_bandY, r, c); }
 
+// ---------------------------------------------------------------- text and emoji
+// The font is 6 px per ASCII character. UTF-8 text may carry emoji: the ones
+// in emoji.gen.h (Noto Emoji, 9x9) are drawn 10 px wide at size 1; anything
+// else that isn't ASCII is a small box. Variation selectors, joiners and skin
+// tones take no space, so a sequence shows as its first picture.
+
+// The next code point of s (advancing it), or 0 at the end.
+uint32_t utf8Next(const char *&s) {
+  uint8_t b = (uint8_t)*s;
+  if (!b) return 0;
+  int n = b < 0x80 ? 0 : b >= 0xF0 ? 3 : b >= 0xE0 ? 2 : b >= 0xC0 ? 1 : -1;
+  if (n < 0) { s++; return 0xFFFD; }
+  uint32_t cp = n == 0 ? b : b & (0x3F >> n);
+  s++;
+  for (int i = 0; i < n; i++, s++) {
+    if (((uint8_t)*s & 0xC0) != 0x80) return 0xFFFD;
+    cp = cp << 6 | ((uint8_t)*s & 0x3F);
+  }
+  return cp;
+}
+
+int emojiIndex(uint32_t cp) {
+  for (int i = 0; i < EMOJI_COUNT; i++) if (EMOJI_CP[i] == cp) return i;
+  return -1;
+}
+static bool zeroWidth(uint32_t cp) {
+  return cp == 0xFE0F || cp == 0xFE0E || cp == 0x200D || (cp >= 0x1F3FB && cp <= 0x1F3FF);
+}
+static int glyphW(uint32_t cp, int size) {
+  if (cp < 0x80) return 6 * size;
+  if (zeroWidth(cp)) return 0;
+  return size == 1 && emojiIndex(cp) >= 0 ? EMOJI_SIZE + 1 : 6 * size;
+}
+static bool ascii(const char *s) {
+  for (; *s; s++) if (*s & 0x80) return false;
+  return true;
+}
+
+int textWidth(const char *s, int size) {
+  if (ascii(s)) return (int)strlen(s) * 6 * size;
+  int w = 0;
+  while (uint32_t cp = utf8Next(s)) w += glyphW(cp, size);
+  return w;
+}
+
+int emojiCount() { return EMOJI_COUNT; }
+uint32_t emojiCode(int i) { return i >= 0 && i < EMOJI_COUNT ? EMOJI_CP[i] : 0x3F; }
+
+void drawEmoji(int i, int x, int y) {  // y is the text's top; the picture sits 1 px higher
+  const uint16_t *px = EMOJI_PX[i];
+  for (int r = 0; r < EMOJI_SIZE; r++)
+    for (int c = 0; c < EMOJI_SIZE; c++, px++)
+      if (*px != EMOJI_CLEAR) canvas.drawPixel(x + c, y - 1 + r - g_bandY, *px);
+}
+
 void text(int x, int y, const char *s, uint16_t c, int size) {
   if (!visible(y, 8 * size)) return;
   canvas.setTextSize(size);
   canvas.setTextColor(c);
-  canvas.drawString(s, x, y - g_bandY);
+  if (ascii(s)) { canvas.drawString(s, x, y - g_bandY); return; }
+  char run[64];
+  int n = 0;
+  auto flush = [&]() {
+    if (!n) return;
+    run[n] = 0;
+    canvas.drawString(run, x, y - g_bandY);
+    x += n * 6 * size;
+    n = 0;
+  };
+  while (uint32_t cp = utf8Next(s)) {
+    if (cp < 0x80) {
+      run[n++] = (char)cp;
+      if (n == (int)sizeof run - 1) flush();
+      continue;
+    }
+    flush();
+    if (zeroWidth(cp)) continue;
+    int e = size == 1 ? emojiIndex(cp) : -1;
+    if (e >= 0) { drawEmoji(e, x, y); x += EMOJI_SIZE + 1; }
+    else { canvas.drawRect(x + 1, y + 1 - g_bandY, 4 * size, 6 * size, c); x += 6 * size; }
+  }
+  flush();
 }
-void center(int y, const char *s, uint16_t c, int size) { text((240 - (int)strlen(s) * 6 * size) / 2, y, s, c, size); }
-void right(int x, int y, const char *s, uint16_t c, int size) { text(x - (int)strlen(s) * 6 * size, y, s, c, size); }
+void center(int y, const char *s, uint16_t c, int size) { text((240 - textWidth(s, size)) / 2, y, s, c, size); }
+void right(int x, int y, const char *s, uint16_t c, int size) { text(x - textWidth(s, size), y, s, c, size); }
 
 String fit(const String &s, int maxw, int size) {
-  int n = maxw / (6 * size);
-  if ((int)s.length() <= n) return s;
-  return s.substring(0, n > 2 ? n - 2 : 0) + "..";
+  if (textWidth(s.c_str(), size) <= maxw) return s;
+  int room = maxw - 12 * size, w = 0;  // leave room for ".."
+  const char *p = s.c_str(), *cut = p;
+  while (true) {
+    const char *at = p;
+    uint32_t cp = utf8Next(p);
+    if (!cp || w + glyphW(cp, size) > room) { cut = at; break; }
+    w += glyphW(cp, size);
+  }
+  return s.substring(0, cut - s.c_str()) + "..";
 }
 
 std::vector<String> wrap(const String &s, int maxw, int size) {
   std::vector<String> out;
-  int cols = maxw / (6 * size);
-  if (cols < 1) cols = 1;
+  int space = 6 * size;
   int start = 0;
   while (start <= (int)s.length()) {
     int nl = s.indexOf('\n', start);
     String para = s.substring(start, nl < 0 ? s.length() : nl);
     String line;
+    int lw = 0;
     int i = 0;
     while (i < (int)para.length()) {
       while (i < (int)para.length() && para[i] == ' ') i++;
@@ -116,14 +201,25 @@ std::vector<String> wrap(const String &s, int maxw, int size) {
       String word = para.substring(i, j);
       i = j;
       if (!word.length()) break;
-      while ((int)word.length() > cols) {
-        if (line.length()) { out.push_back(line); line = ""; }
-        out.push_back(word.substring(0, cols));
-        word = word.substring(cols);
+      int ww = textWidth(word.c_str(), size);
+      while (ww > maxw) {  // a word longer than the line: cut it at a code point
+        if (line.length()) { out.push_back(line); line = ""; lw = 0; }
+        const char *p = word.c_str(), *cut = p;
+        int w = 0;
+        while (true) {
+          const char *at = p;
+          uint32_t cp = utf8Next(p);
+          if (!cp || (w + glyphW(cp, size) > maxw && at > word.c_str())) { cut = at; break; }
+          w += glyphW(cp, size);
+        }
+        int k = cut - word.c_str();
+        out.push_back(word.substring(0, k));
+        word = word.substring(k);
+        ww = textWidth(word.c_str(), size);
       }
-      if (!line.length()) line = word;
-      else if ((int)(line.length() + 1 + word.length()) <= cols) line += " " + word;
-      else { out.push_back(line); line = word; }
+      if (!line.length()) { line = word; lw = ww; }
+      else if (lw + space + ww <= maxw) { line += " " + word; lw += space + ww; }
+      else { out.push_back(line); line = word; lw = ww; }
     }
     out.push_back(line);
     if (nl < 0) break;
@@ -138,7 +234,7 @@ void footer(const Hint *h, int n) {
   fill(0, 124, 240, 11, col.bg);
   int x = 3;
   for (int i = 0; i < n; i++) {
-    int kw = strlen(h[i].key) * 6 + 4, lw = strlen(h[i].label) * 6;
+    int kw = textWidth(h[i].key) + 4, lw = textWidth(h[i].label);
     if (x + kw + lw + 4 > 240) break;
     rfill(x, 125, kw, 10, 2, col.surface2);
     text(x + 2, 126, h[i].key, col.text);
@@ -158,10 +254,10 @@ void statusbar(const char *title) {
   if (status.charging) canvas.fillTriangle(bx + 10, 2 - g_bandY, bx + 6, 8 - g_bandY, bx + 11, 8 - g_bandY, col.warn);
   char pt[6];
   snprintf(pt, sizeof pt, "%d%%", pct);
-  int px = bx - 3 - strlen(pt) * 6;
+  int px = bx - 3 - textWidth(pt);
   text(px, 3, pt, col.muted);
   const char *tt = status.time.length() ? status.time.c_str() : "--:--";
-  int tx = px - 7 - strlen(tt) * 6;
+  int tx = px - 7 - textWidth(tt);
   text(tx, 3, tt, col.text);
   int left = tx - 4;
   if (status.wifiOn) {
@@ -221,8 +317,8 @@ static int listDraw(F row, int total, int sel, int top, int x, int y, int w, int
       rw = 30;
     } else if (r.value.length()) {
       String v = fit(r.value, w * 45 / 100);
-      text(x + w - 6 - v.length() * 6, ty, v.c_str(), on ? col.accent : col.muted);
-      rw = v.length() * 6 + 10;
+      text(x + w - 6 - textWidth(v.c_str()), ty, v.c_str(), on ? col.accent : col.muted);
+      rw = textWidth(v.c_str()) + 10;
     }
     text(tx, ty, fit(r.label, w - (tx - x) - rw - 2).c_str(), r.dim ? col.muted : col.text);
   }
@@ -246,7 +342,7 @@ int tabs(const char *const *labels, int n, int active, int y) {
       int x = 4 + i * w;
       if (i + 1 == active) rfill(x + 1, y + 1, w - 2, 11, 3, col.accent);
       String s = fit(labels[i], w - 4);
-      text(x + (w - s.length() * 6) / 2, y + 3, s.c_str(), i + 1 == active ? col.on_accent : col.muted);
+      text(x + (w - textWidth(s.c_str())) / 2, y + 3, s.c_str(), i + 1 == active ? col.on_accent : col.muted);
     }
   }
   return y + 16;
@@ -271,7 +367,7 @@ void bar(int x, int y, int w, int h, float frac, uint16_t c) {
 }
 
 int button(int x, int y, const char *label, bool focused) {
-  int w = strlen(label) * 6 + 12;
+  int w = textWidth(label) + 12;
   rfill(x, y, w, 14, 4, focused ? col.accent : col.surface2);
   text(x + 6, y + 3, label, focused ? col.on_accent : col.text);
   return w;

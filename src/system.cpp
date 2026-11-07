@@ -137,9 +137,11 @@ static void notify(const String &title, const String &body = "", const char *snd
   toast(title, 3);
   sound(snd);
 }
+// for native services (meshsvc.cpp); "none" as the sound is a silent one
+void systemNotify(const String &title, const String &body, const char *snd) { notify(title, body, snd); }
 
 // ================================================================ dialogs
-enum DlgKind { DLG_NONE, DLG_ALERT, DLG_CONFIRM, DLG_PROMPT, DLG_MENU };
+enum DlgKind { DLG_NONE, DLG_ALERT, DLG_CONFIRM, DLG_PROMPT, DLG_MENU, DLG_EMOJI };
 struct Dialog {
   DlgKind kind = DLG_NONE;
   String title, msg, text;
@@ -171,7 +173,8 @@ static void finishDialog(bool ok, int idx, const String &text) {
     case DLG_ALERT: n = 0; break;
     case DLG_CONFIRM: lua_pushboolean(L, ok); break;
     case DLG_MENU: if (ok) lua_pushinteger(L, idx); else lua_pushnil(L); break;
-    case DLG_PROMPT: if (ok) lua_pushstring(L, text.c_str()); else lua_pushnil(L); break;
+    case DLG_PROMPT:
+    case DLG_EMOJI: if (ok) lua_pushstring(L, text.c_str()); else lua_pushnil(L); break;
     default: n = 0;
   }
   if (!vm::call(n, 0)) fail(vm::lastError);
@@ -185,6 +188,18 @@ static void openDialog(DlgKind kind, const String &title, const String &msg) {
   dlg.title = title;
   dlg.msg = msg;
   dlg.vmGen = vmGen;
+}
+
+// The emoji picker (shell.emoji): ui::emojiCount() pictures in a grid, most
+// used first; Enter gives the app the emoji as UTF-8 text.
+static const int EMOJI_COLS = 16, EMOJI_ROWS = 6;
+static String utf8(uint32_t cp) {
+  char b[5] = {0};
+  if (cp < 0x80) b[0] = cp;
+  else if (cp < 0x800) { b[0] = 0xC0 | cp >> 6; b[1] = 0x80 | (cp & 0x3F); }
+  else if (cp < 0x10000) { b[0] = 0xE0 | cp >> 12; b[1] = 0x80 | (cp >> 6 & 0x3F); b[2] = 0x80 | (cp & 0x3F); }
+  else { b[0] = 0xF0 | cp >> 18; b[1] = 0x80 | (cp >> 12 & 0x3F); b[2] = 0x80 | (cp >> 6 & 0x3F); b[3] = 0x80 | (cp & 0x3F); }
+  return b;
 }
 
 static void dialogKey(const Key &k) {
@@ -214,6 +229,14 @@ static void dialogKey(const Key &k) {
     else if (key == "enter") finishDialog(true, dlg.sel, "");
     else if (key == "esc") finishDialog(false, 0, "");
     else if (k.text && k.text[0] >= '1' && k.text[0] <= '9' && k.text[0] - '0' <= n) finishDialog(true, k.text[0] - '0', "");
+  } else if (dlg.kind == DLG_EMOJI) {
+    int n = ui::emojiCount(), c = k.text && !k.fn ? k.text[0] : 0;
+    if (key == "up" || c == ';') dlg.sel = max(1, dlg.sel - EMOJI_COLS);
+    else if (key == "down" || c == '.') dlg.sel = min(n, dlg.sel + EMOJI_COLS);
+    else if (key == "left" || c == ',') dlg.sel = max(1, dlg.sel - 1);
+    else if (key == "right" || c == '/') dlg.sel = min(n, dlg.sel + 1);
+    else if (key == "enter") finishDialog(true, dlg.sel, utf8(ui::emojiCode(dlg.sel - 1)));
+    else if (key == "esc") finishDialog(false, 0, "");
   }
 }
 
@@ -255,6 +278,19 @@ static void drawDialog() {
       if (idx == dlg.sel) ui::rfill(x + 4, ry - 1, 172, 11, 3, col.accent);
       ui::text(x + 8, ry, ui::fit(dlg.items[idx - 1], 164).c_str(), idx == dlg.sel ? col.on_accent : col.text);
     }
+  } else if (dlg.kind == DLG_EMOJI) {
+    int n = ui::emojiCount(), x = 8, y = 18, cell = 14;
+    ui::box(x - 4, y - 4, EMOJI_COLS * cell + 8, EMOJI_ROWS * cell + 22);
+    int row = (dlg.sel - 1) / EMOJI_COLS, top = max(0, min(row - EMOJI_ROWS + 2, (n - 1) / EMOJI_COLS - EMOJI_ROWS + 1));
+    for (int r = 0; r < EMOJI_ROWS; r++)
+      for (int c = 0; c < EMOJI_COLS; c++) {
+        int i = (top + r) * EMOJI_COLS + c;
+        if (i >= n) break;
+        int cx = x + c * cell, cy = y + r * cell;
+        if (i + 1 == dlg.sel) ui::rfill(cx - 1, cy - 1, cell - 1, cell - 1, 2, col.accent);
+        ui::drawEmoji(i, cx + 2, cy + 3);
+      }
+    ui::text(x, y + EMOJI_ROWS * cell + 4, "Arrows pick  Enter adds  Esc", col.muted);
   }
 }
 
@@ -905,7 +941,7 @@ static void drawDesktop() {
     if (on) ui::card(x + 1, 82, slot - 2, 41, true);
     ui::tile(x + 9, 85, 28, a->icon, a->color);
     String l = ui::fit(a->title, slot - 4);
-    ui::text(x + (slot - l.length() * 6) / 2, 115, l.c_str(), on ? col.text : col.muted);
+    ui::text(x + (slot - ui::textWidth(l.c_str())) / 2, 115, l.c_str(), on ? col.text : col.muted);
   }
   static const ui::Hint h[] = {{"Enter", "Open"}, {"Tab", "All apps"}, {"Fn+Q", "Quick"}};
   ui::footer(h, 3);
@@ -1635,7 +1671,20 @@ static void conLine(String line) {
     else if (cmd == "run") { launch(arg); reply("ok"); }
     else if (cmd == "ls") { for (auto &e : store::list(arg)) reply(String(e.dir ? "d " : "- ") + e.name); }
     else if (cmd == "log") {
-      String r = usbdev::logDump();
+      // the last ~6 KB of data/log.txt (whole lines), so a busy session doesn't
+      // scroll out of the 1.5 KB ring; "!log ring" (or no card) shows the ring
+      String r, real;
+      fs::FS *fs = arg == "ring" ? nullptr : store::resolve("data/log.txt", real);
+      File f = fs ? fs->open(real) : File();
+      if (f) {
+        size_t size = f.size(), from = size > 6000 ? size - 6000 : 0;
+        f.seek(from);
+        r = f.readString();
+        f.close();
+        if (from > 0) r = r.substring(r.indexOf('\n') + 1);
+      } else {
+        r = usbdev::logDump();
+      }
       int s = 0;
       while (s < (int)r.length()) { int e = r.indexOf('\n', s); if (e < 0) e = r.length(); reply("# " + r.substring(s, e)); s = e + 1; }
     } else reply("error: unknown command");
@@ -1890,7 +1939,7 @@ void drawBand() {
   if (dlg.kind != DLG_NONE) drawDialog();
   if (toastMsg.length()) {
     String m = ui::fit(toastMsg, 220);
-    int w = m.length() * 6 + 16, x = (240 - w) / 2;
+    int w = ui::textWidth(m.c_str()) + 16, x = (240 - w) / 2;
     if (ui::visible(108, 16)) {
       ui::rfill(x, 108, w, 16, 6, col.surface2);
       ui::rrect(x, 108, w, 16, 6, col.accent);
@@ -1978,6 +2027,12 @@ static int l_prompt(lua_State *L) {
   dlg.text = OS(L, 2);
   dlg.luaRef = storeCallback(L, 3);
   if (lua_istable(L, 4)) { lua_getfield(L, 4, "secret"); dlg.secret = lua_toboolean(L, -1); lua_pop(L, 1); }
+  return 0;
+}
+// emoji(callback): the picker; callback(text) with the emoji, or nil
+static int l_emoji(lua_State *L) {
+  openDialog(DLG_EMOJI, "Emoji", "");
+  dlg.luaRef = storeCallback(L, 1);
   return 0;
 }
 static int l_menu(lua_State *L) {
@@ -2199,7 +2254,7 @@ static int l_newindex(lua_State *L) {
 
 void registerLua(lua_State *L) {
   static const luaL_Reg fns[] = {
-      {"toast", l_toast}, {"alert", l_alert}, {"confirm", l_confirm}, {"prompt", l_prompt}, {"menu", l_menu},
+      {"toast", l_toast}, {"alert", l_alert}, {"confirm", l_confirm}, {"prompt", l_prompt}, {"menu", l_menu}, {"emoji", l_emoji},
       {"notify", l_notify}, {"sound", l_sound}, {"launch", l_launch}, {"edit", l_edit}, {"home", l_home},
       {"back", l_back}, {"open_file", l_open_file}, {"run_file", l_run_file}, {"app", l_app},
       {"format_time", l_format_time}, {"tz", l_tz}, {"wifi_start", l_wifi_start}, {"wifi_stop", l_wifi_stop}, {"focus", l_focus},

@@ -38,6 +38,12 @@ void circle(int x, int y, int r, uint16_t c);
 void text(int x, int y, const char *s, uint16_t c, int size = 1);
 void center(int y, const char *s, uint16_t c, int size = 1);
 void right(int x, int y, const char *s, uint16_t c, int size = 1);
+int textWidth(const char *s, int size = 1);  // pixels, emoji included
+uint32_t utf8Next(const char *&s);            // the next code point, 0 at the end
+int emojiIndex(uint32_t cp);                  // in emoji.gen.h, or -1
+void drawEmoji(int i, int x, int y);
+int emojiCount();
+uint32_t emojiCode(int i);
 String fit(const String &s, int maxw, int size = 1);
 std::vector<String> wrap(const String &s, int maxw, int size = 1);
 

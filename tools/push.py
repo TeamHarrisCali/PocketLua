@@ -60,6 +60,49 @@ def send(fd, line):
         b = b[os.write(fd, b):]
 
 
+def fput(fd, local, remote):
+    """Streams a file to the card (!fput): each line is acknowledged and the
+    whole file is checked with a CRC, so a short write can't pass as "ok"."""
+    data = open(local, "rb").read()
+    send(fd, f"!fput {remote} {len(data)}")
+    r = reply_line(fd)
+    # the USB link can drop a byte of the reply ("rady"); errors are longer
+    # messages, and the CRC at the end catches anything that went wrong
+    if r != "ready" and not (3 <= len(r) <= 5 and r.endswith("dy")):
+        sys.exit(r)
+    # The device answers each line with "+" once it is on the card; wait for
+    # that, since its USB serial drops bytes when its queue is full. Builds
+    # without the "+" get smaller lines with a pause after each instead.
+    step, acked, i = 1536, None, 0  # 1536 bytes = 2048 base64 characters
+    t0, shown = time.time(), -1
+    while i < len(data):
+        send(fd, base64.b64encode(data[i:i + step]).decode())
+        i += step
+        if acked is not False:
+            try:
+                r = reply_line(fd, 1.0 if acked is None else 5.0)
+            except TimeoutError:
+                if acked:
+                    sys.exit("\nthe device stopped answering")
+                acked, step = False, 768
+                print("(older build on the device: sending slowly)")
+                continue
+            if r != "+":
+                sys.exit("\n" + r)
+            acked = True
+        else:
+            time.sleep(0.03)
+        pct = 100 * min(i, len(data)) // len(data)
+        if pct != shown:
+            print(f"\r{pct}%", end="", flush=True)
+            shown = pct
+    r = reply_line(fd, 30)
+    expect = f"ok {remote} {len(data)} {zlib.crc32(data):x}"
+    print(f"\r{r} ({time.time() - t0:.0f} s)")
+    if r != expect:
+        sys.exit("transfer check failed, expected: " + expect)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", default="/dev/ttyACM0")
@@ -71,53 +114,13 @@ def main():
     send(fd, "")  # flush any half-typed line
 
     if a.cmd == "send":
-        local, remote = a.args
-        data = open(local, "rb").read()
-        send(fd, f"!fput {remote} {len(data)}")
-        r = reply_line(fd)
-        if r != "ready":
-            sys.exit(r)
-        # The device answers each line with "+" once it is on the card; wait for
-        # that, since its USB serial drops bytes when its queue is full. Builds
-        # without the "+" get smaller lines with a pause after each instead.
-        step, acked, i = 1536, None, 0  # 1536 bytes = 2048 base64 characters
-        t0, shown = time.time(), -1
-        while i < len(data):
-            send(fd, base64.b64encode(data[i:i + step]).decode())
-            i += step
-            if acked is not False:
-                try:
-                    r = reply_line(fd, 1.0 if acked is None else 5.0)
-                except TimeoutError:
-                    if acked:
-                        sys.exit("\nthe device stopped answering")
-                    acked, step = False, 768
-                    print("(older build on the device: sending slowly)")
-                    continue
-                if r != "+":
-                    sys.exit("\n" + r)
-                acked = True
-            else:
-                time.sleep(0.03)
-            pct = 100 * min(i, len(data)) // len(data)
-            if pct != shown:
-                print(f"\r{pct}%", end="", flush=True)
-                shown = pct
-        r = reply_line(fd, 30)
-        expect = f"ok {remote} {len(data)} {zlib.crc32(data):x}"
-        print(f"\r{r} ({time.time() - t0:.0f} s)")
-        if r != expect:
-            sys.exit("transfer check failed, expected: " + expect)
+        fput(fd, *a.args)
     elif a.cmd == "put":
+        # !begin/!data/!end built the file in one RAM string and wrote whatever
+        # fitted: files over the largest free block (~20 KB) came out cut short
+        # with an "ok". It streams through !fput like send now.
         local, remote = a.args
-        data = open(local, "rb").read()
-        send(fd, "!begin " + remote)
-        print(reply_line(fd))
-        for i in range(0, len(data), 768):
-            send(fd, "!data " + base64.b64encode(data[i:i + 768]).decode())
-            reply_line(fd)
-        send(fd, "!end")
-        print(reply_line(fd))
+        fput(fd, local, remote)
         if a.run:
             send(fd, "!run " + a.run)
             print(reply_line(fd))

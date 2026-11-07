@@ -1095,55 +1095,124 @@ static volatile bool radioFlag = false;
 static bool radioTx = false;
 static void IRAM_ATTR onRadio() { radioFlag = true; }
 
-// begin([freq_mhz=915][, sf=9][, power_dbm=14]) -> true | false, error
-static int lo_begin(lua_State *L) {
-  float freq = (float)luaL_optnumber(L, 1, 915.0);
-  int sf = (int)luaL_optinteger(L, 2, 9);
-  int power = (int)luaL_optinteger(L, 3, 14);
+static float optField(lua_State *L, const char *k, float def) {
+  lua_getfield(L, 1, k);
+  float v = lua_isnumber(L, -1) ? (float)lua_tonumber(L, -1) : def;
+  lua_pop(L, 1);
+  return v;
+}
+
+// The radio belongs to the core: an app borrows it (lora.begin) and gives it
+// back when it closes; meanwhile the Mesh background listener (meshsvc.cpp)
+// may use it. An app always wins.
+static bool radioApp = false;
+
+static int radioBegin(const LoraParams &p) {
   m5::PI4IOE5V6408_Class ioe(0x43, 400000, &m5::In_I2C);
-  if (!ioe.begin()) { lua_pushboolean(L, 0); lua_pushstring(L, "LoRa cap not found"); return 2; }
+  if (!ioe.begin()) return RADIOLIB_ERR_CHIP_NOT_FOUND;
   ioe.setDirection(0, true);
   ioe.setHighImpedance(0, false);
   ioe.digitalWrite(0, true);  // RF switch
-  if (!radio) radio = new SX1262(radioMod = new Module(5, 4, 3, 6));
-  int st = radio->begin(freq, 125.0, sf, 5, 0x12, power, 12, 3.0, true);
-  luaBudgetReset();
-  if (st != RADIOLIB_ERR_NONE) { lua_pushboolean(L, 0); lua_pushfstring(L, "radio error %d", st); return 2; }
+  // given the bus rather than owning it: RadioLib ends a bus it owns when no
+  // chip answers, and that is the SD card's bus
+  if (!radio) radio = new SX1262(radioMod = new Module(5, 4, 3, 6, SPI));
+  int st = radio->begin(p.freq, p.bw, p.sf, p.cr, p.sync, p.power, p.preamble, p.tcxo, true);
+  if (st != RADIOLIB_ERR_NONE && p.tcxo > 0) st = radio->begin(p.freq, p.bw, p.sf, p.cr, p.sync, p.power, p.preamble, 0, true);
+  if (st != RADIOLIB_ERR_NONE) return st;
   radio->setCurrentLimit(140);
   radio->setPacketReceivedAction(onRadio);
   radio->startReceive();
   radioTx = false;
-  lua_pushboolean(L, 1);
-  return 1;
+  radioFlag = false;
+  return RADIOLIB_ERR_NONE;
 }
 
-static int lo_send(lua_State *L) {
-  if (!radio || radioTx) { lua_pushboolean(L, 0); return 1; }
-  String s = str(L, 1);
-  if (s.length() > 240) s = s.substring(0, 240);
+static void loraOff() {
+  if (radio) { radio->sleep(); delete radio; radio = nullptr; }
+  delete radioMod;
+  radioMod = nullptr;
+  radioTx = false;
+}
+
+bool hwLoraCap() {
+  m5::PI4IOE5V6408_Class ioe(0x43, 400000, &m5::In_I2C);
+  return ioe.begin();
+}
+bool hwLoraAppOwns() { return radioApp; }
+bool hwLoraBegin(const LoraParams &p) { return !radioApp && radioBegin(p) == RADIOLIB_ERR_NONE; }
+void hwLoraStop() { if (!radioApp) loraOff(); }
+bool hwLoraBusy() { return radio && radioTx; }
+
+bool hwLoraSend(const uint8_t *buf, size_t len) {
+  if (!radio || radioTx) return false;
   radioTx = true;
-  lua_pushboolean(L, radio->startTransmit(s) == RADIOLIB_ERR_NONE);
-  return 1;
+  return radio->startTransmit(buf, len > 255 ? 255 : len) == RADIOLIB_ERR_NONE;
 }
 
-// recv() -> { data=, rssi=, snr= } or nil. Call every frame; also finishes sends.
-static int lo_recv(lua_State *L) {
-  if (!radio || !radioFlag) { lua_pushnil(L); return 1; }
+// A received packet, or 0 bytes. Also finishes a transmit (call it often).
+size_t hwLoraRecv(uint8_t buf[256], float &rssi, float &snr) {
+  if (!radio || !radioFlag) return 0;
   radioFlag = false;
   if (radioTx) {
     radio->finishTransmit();
     radioTx = false;
     radio->startReceive();
-    lua_pushnil(L);
-    return 1;
+    return 0;
   }
-  String s;
-  int st = radio->readData(s);
-  float rssi = radio->getRSSI(), snr = radio->getSNR();
+  size_t n = radio->getPacketLength();
+  if (n > 256) n = 256;
+  int st = radio->readData(buf, n);
+  rssi = radio->getRSSI();
+  snr = radio->getSNR();
   radio->startReceive();
-  if (st != RADIOLIB_ERR_NONE) { lua_pushnil(L); return 1; }
+  return st == RADIOLIB_ERR_NONE ? n : 0;
+}
+
+// begin([freq_mhz=915][, sf=9][, power_dbm=14]) -> true | false, error
+// begin{freq=, bw=125, sf=9, cr=5, sync=0x12, preamble=12, power=14, tcxo=1.8}:
+// the Mesh app's Meshtastic settings. A TCXO that doesn't start is retried as
+// a crystal (tcxo 0); 1.8 V is the Cap LoRa-1262's (Meshtastic's profile for it).
+static int lo_begin(lua_State *L) {
+  LoraParams p;
+  if (lua_istable(L, 1)) {
+    p.freq = optField(L, "freq", p.freq);
+    p.bw = optField(L, "bw", p.bw);
+    p.sf = (int)optField(L, "sf", p.sf);
+    p.cr = (int)optField(L, "cr", p.cr);
+    p.sync = (int)optField(L, "sync", p.sync);
+    p.preamble = (int)optField(L, "preamble", p.preamble);
+    p.power = (int)optField(L, "power", p.power);
+    p.tcxo = optField(L, "tcxo", p.tcxo);
+  } else {
+    p.freq = (float)luaL_optnumber(L, 1, p.freq);
+    p.sf = (int)luaL_optinteger(L, 2, p.sf);
+    p.power = (int)luaL_optinteger(L, 3, p.power);
+  }
+  meshsvcPause();  // the background listener hands the radio over
+  radioApp = true;
+  int st = radioBegin(p);
+  luaBudgetReset();
+  if (st == RADIOLIB_ERR_CHIP_NOT_FOUND && !radio) { lua_pushboolean(L, 0); lua_pushstring(L, "LoRa cap not found"); return 2; }
+  if (st != RADIOLIB_ERR_NONE) { lua_pushboolean(L, 0); lua_pushfstring(L, "radio error %d", st); return 2; }
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
+static int lo_send(lua_State *L) {
+  size_t n;
+  const char *s = luaL_checklstring(L, 1, &n);  // binary-safe: Mesh packets have NUL bytes
+  lua_pushboolean(L, radioApp && hwLoraSend((const uint8_t *)s, n));
+  return 1;
+}
+
+// recv() -> { data=, rssi=, snr= } or nil. Call every frame; also finishes sends.
+static int lo_recv(lua_State *L) {
+  uint8_t buf[256];
+  float rssi = 0, snr = 0;
+  size_t n = radioApp ? hwLoraRecv(buf, rssi, snr) : 0;
+  if (!n) { lua_pushnil(L); return 1; }
   lua_createtable(L, 0, 3);
-  lua_pushlstring(L, s.c_str(), s.length()); lua_setfield(L, -2, "data");
+  lua_pushlstring(L, (const char *)buf, n); lua_setfield(L, -2, "data");
   lua_pushnumber(L, rssi); lua_setfield(L, -2, "rssi");
   lua_pushnumber(L, snr); lua_setfield(L, -2, "snr");
   return 1;
@@ -1151,12 +1220,7 @@ static int lo_recv(lua_State *L) {
 
 static int lo_busy(lua_State *L) { lua_pushboolean(L, radioTx); return 1; }
 
-static void loraOff() {
-  if (radio) { radio->sleep(); delete radio; radio = nullptr; }
-  delete radioMod;
-  radioMod = nullptr;
-}
-static int lo_stop(lua_State *L) { loraOff(); return 0; }
+static int lo_stop(lua_State *L) { loraOff(); radioApp = false; return 0; }
 
 // =============================================================== GPS (Cap LoRa-1262)
 static TinyGPSPlus *gpsP = nullptr;
@@ -1177,6 +1241,7 @@ static int gp_stop(lua_State *L) { gpsOff(); return 0; }
 // stopped them. Drivers belong to the core; an app only borrows them.
 void hwReleaseDrivers() {
   loraOff();
+  radioApp = false;
   gpsOff();
 }
 
@@ -1269,10 +1334,11 @@ static const luaL_Reg dispLib[] = {{"image", di_image}, {"fill", di_fill}, {"tex
 extern const luaL_Reg musiclibFns[];  // musiclib.cpp
 extern const luaL_Reg appstoreFns[];  // appstore.cpp
 extern const luaL_Reg backupFns[];    // backup.cpp
+extern const luaL_Reg cryptoFns[];    // meshcrypto_lua.cpp
 static const struct { const char *name; const luaL_Reg *fns; } HW_LIBS[] = {
     {"audio", audioLib}, {"ir", irLib}, {"i2c", i2cLib}, {"http", httpLib},
     {"lora", loraLib}, {"gps", gpsLib}, {"disp", dispLib}, {"musiclib", musiclibFns},
-    {"appstore", appstoreFns}, {"backup", backupFns}};
+    {"appstore", appstoreFns}, {"backup", backupFns}, {"crypto", cryptoFns}};
 
 // sys.hwlib(name) -> the table for that driver or library, or nil (runtime.lua
 // calls it the first time an app uses one of these globals)

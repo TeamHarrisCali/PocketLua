@@ -22,7 +22,11 @@
 
 // A quarter-screen frame buffer (16 KB instead of 65 KB): each frame is drawn
 // in four bands; g_bandY tells the drawing code which band it is.
-M5Canvas canvas(&M5Cardputer.Display);
+// No parent display here: M5Cardputer.Display is a reference set in
+// M5Cardputer's constructor, and globals in other files may be constructed
+// first (the pioarduino build did that: the canvas got a null display and
+// the first pushSprite crashed). The display is named where it is pushed.
+M5Canvas canvas;
 static const int BAND_H = (SCREEN_H + 3) / 4;
 int g_bandY = 0;
 int g_bandH = BAND_H;
@@ -116,7 +120,7 @@ static bool writeScreenshot(const String &path) {
       }
       f.write(row, rowBytes);
     }
-    canvas.pushSprite(0, g_bandY);
+    canvas.pushSprite(&M5Cardputer.Display, 0, g_bandY);
   }
   g_bandY = 0;
   f.close();
@@ -297,6 +301,7 @@ static void osMain() {
   store::safeMode = safe;
   vm::reserveArena();  // before Wi-Fi can fragment the heap
   shell::begin(safe);
+  if (!safe) meshsvcBegin();  // the Mesh background listener's on/off default
   logHeap(safe ? "booted (safe)" : "booted");
 
   uint32_t last = millis(), lastHeapLog = 0;
@@ -311,6 +316,8 @@ static void osMain() {
     settingsTick();
     g_crumb = "hw tick";
     hwTick();
+    g_crumb = "mesh listener";
+    meshsvcTick();
     markFirmwareGood();
     if (millis() - lastHeapLog > 30000) {
       lastHeapLog = millis();
@@ -332,7 +339,7 @@ static void osMain() {
     } else if (!g_displayAsleep && !g_displayHold) {
       for (g_bandY = 0; g_bandY < SCREEN_H; g_bandY += g_bandH) {
         shell::drawBand();
-        canvas.pushSprite(0, g_bandY);
+        canvas.pushSprite(&M5Cardputer.Display, 0, g_bandY);
       }
       g_bandY = 0;
     }

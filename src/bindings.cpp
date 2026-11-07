@@ -3,6 +3,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include "bindings.h"
+#include "uikit.h"
 #include "hw.h"
 #include "embedded.h"
 #include <vector>
@@ -224,8 +225,10 @@ static int g_text(lua_State *L) {
 }
 static int g_text_w(lua_State *L) {
   const char *s = luaL_checkstring(L, 1);
-  canvas.setTextSize((float)luaL_optnumber(L, 2, 1));
-  lua_pushinteger(L, canvas.textWidth(s));
+  float size = (float)luaL_optnumber(L, 2, 1);
+  canvas.setTextSize(size);
+  // whole sizes go through ui::textWidth, which knows the emoji
+  lua_pushinteger(L, size == (int)size ? ui::textWidth(s, (int)size) : canvas.textWidth(s));
   return 1;
 }
 static int g_clip(lua_State *L) { canvas.setClipRect(num(L, 1), ny(L, 2), num(L, 3), num(L, 4)); return 0; }
@@ -740,8 +743,9 @@ static int k_now(lua_State *L) {
   time_t t = time(nullptr);
   struct tm tm;
   localtime_r(&t, &tm);
-  lua_createtable(L, 0, 8);
+  lua_createtable(L, 0, 9);
   lua_pushboolean(L, t > 1700000000); lua_setfield(L, -2, "valid");
+  lua_pushinteger(L, (lua_Integer)t); lua_setfield(L, -2, "unix");  // fits 32-bit Lua until 2038
   lua_pushinteger(L, tm.tm_hour); lua_setfield(L, -2, "h");
   lua_pushinteger(L, tm.tm_min); lua_setfield(L, -2, "m");
   lua_pushinteger(L, tm.tm_sec); lua_setfield(L, -2, "s");

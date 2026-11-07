@@ -1,4 +1,4 @@
--- Dialog boxes (alert, confirm, prompt, menu). The shell keeps only the small
+-- Dialog boxes (alert, confirm, prompt, menu, emoji). The shell keeps only the small
 -- state table of the open dialog; this code loads when a dialog is shown and is
 -- dropped again on the next app switch.
 local col = ui.col
@@ -21,6 +21,9 @@ function dialog.key(m, k, close)
     elseif k.ctrl and k.text == "c" then
       shell.clipboard = m.text
     elseif k.text and not k.ctrl and #m.text < 64 then m.text = m.text .. k.text end
+  elseif m.kind == "emoji" then  -- the device shows a grid; here Enter picks the first (thumbs up)
+    if k.key == "enter" then close(); m.cb("\xF0\x9F\x91\x8D")
+    elseif k.key == "esc" then close(); m.cb(nil) end
   elseif m.kind == "menu" then
     local d = ui.nav(k)
     if d == "up" then m.sel = (m.sel - 2) % #m.items + 1
@@ -55,6 +58,9 @@ function dialog.draw(m)
     if #shown > 30 then shown = shown:sub(-30) end
     ui.text(x + 12, y + 24, shown .. ((sys.millis() // 500) % 2 == 0 and "_" or ""), col.text)
     ui.text(x + 8, y + 44, "Enter ok   Esc cancel", col.dim)
+  elseif m.kind == "emoji" then
+    ui.box(4, 14, 232, 100)
+    ui.text(12, 20, "Emoji", col.accent)
   elseif m.kind == "menu" then
     local n = #m.items
     local rows = math.min(n, 6)
