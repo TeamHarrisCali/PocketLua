@@ -1,5 +1,5 @@
 -- Mesh: a Meshtastic-compatible node on the Cap LoRa-1262. Chat on the public
--- channel and private channels, see the nodes around (battery, position,
+-- channel and private channels, see the nodes around (distance, hops,
 -- traceroute), send private (public-key) messages and share a position.
 -- It joins as CLIENT_MUTE: it never relays other nodes' packets. The radio only
 -- runs while the app is open, and Wi-Fi is off meanwhile (focus mode) for the
@@ -15,8 +15,8 @@ app.help = {
   { "Up/Dn", "Scroll / pick" },
   { "T", "Node: traceroute" },
   { "X", "DMs: remove contact" },
+  { "M", "DMs: quiet contact" },
   { "Esc", "Clear, then back" },
-  { "R", "Retry radio" },
 }
 
 local mt = require("meshtastic")
@@ -24,19 +24,19 @@ local pb = require("protobuf")
 
 local TABS = { "Chat", "Nodes", "DMs", "Setup" }
 local DIR = "data/mesh"
-local MAX_LINES, MAX_NODES, KEEP, ROWS = 40, 40, 40, 7
+local MAX_LINES, MAX_NODES, KEEP, ROWS = 40, 30, 40, 7  -- a node costs ~0.5 KB, so 30 of them
 local NODEINFO_EVERY, POS_EVERY = 3 * 3600, 15 * 60
 
 -- S is what the tab modules share with the core
 local S = { mt = mt, pb = pb, nodes = {}, channels = {}, chat = {}, dms = {}, unread = {}, contacts = {}, chan_sel = 1,
   now = 0, tx = 0, rx = 0, pos_mode = 1, preset_i = 1, radio_ok = false }
 local tab, tabmod = 1, nil
-local hist = mt.history(120)
+local hist = mt.history(64)  -- (from, id) of recent packets: we never relay, so a short memory does
 local nodes_dirty = false
 local scroll, input, blink = 0, "", true
 local queue, waiting, traces = {}, {}, {}
 local crows, csel, ctop = {}, 1, 1  -- the DMs tab's contact list
-local gps_left, info_left, pos_left, save_left = 0, 5, 60, 30
+local gps_left, info_left, pos_left, save_left, gc_left = 0, 5, 60, 30, 15
 
 -- ---------------------------------------------------------------- helpers
 function S.hex(s) return (s:gsub(".", function(c) return string.format("%02x", c:byte()) end)) end
@@ -120,13 +120,34 @@ function S.is_contact(hx)
   return false
 end
 
+-- ---------------------------------------------------------------- quiet
+-- cfg mesh_mute_ch (channel names) and mesh_mute_dm (node hexes) are comma
+-- lists; mesh_dm_new = "0" keeps DMs from people not in the list quiet. The
+-- background listener (meshsvc.cpp) reads the same settings.
+function S.listed(key, item) return ("," .. (cfg.get(key) or "") .. ","):find("," .. item .. ",", 1, true) ~= nil end
+function S.toggle(key, item)
+  local out, found = {}, false
+  for v in (cfg.get(key) or ""):gmatch("[^,]+") do
+    if v == item then found = true else out[#out + 1] = v end
+  end
+  if not found then out[#out + 1] = item end
+  cfg.set(key, #out > 0 and table.concat(out, ",") or nil)
+  return not found
+end
+local function dm_quiet(hx)
+  return S.listed("mesh_mute_dm", hx) or (not S.is_contact(hx) and cfg.get("mesh_dm_new") == "0")
+end
+local importing = false
+local function ding(quiet) if not quiet and not importing then shell.sound("notify") end end
+
 local function build_contacts()
   crows = {}
   for i, hx in ipairs(S.contacts) do
     local n = S.nodes[hx]
-    crows[i] = { label = ui.fit(S.name_of(hx) .. "  " .. (n and n.long or ""), 150), dim = not (n and n.seen),
-      value = n and n.seen and "nearby" or "", badge = S.unread[hx] and tostring(S.unread[hx]) or nil,
-      badge_color = ui.accents.orange }
+    local quiet = S.listed("mesh_mute_dm", hx)
+    crows[i] = { label = ui.fit(S.name_of(hx) .. "  " .. (n and n.long or ""), 140), dim = not (n and n.seen),
+      value = (quiet and "quiet " or "") .. (n and n.seen and "nearby" or ""),
+      badge = S.unread[hx] and tostring(S.unread[hx]) or nil, badge_color = ui.accents.orange }
   end
   csel = math.max(1, math.min(csel, #crows))
 end
@@ -234,6 +255,19 @@ function S.send_nodeinfo(to, want_response)
   S.send_channel(1, to or mt.BROADCAST, { portnum = mt.PORT.NODEINFO, payload = my_user(), want_response = want_response })
 end
 function S.announce() info_left = 2 end
+
+-- Keys travel in NodeInfo. A node we hear without one gets ours with "send
+-- yours back" (as Meshtastic firmware does on first contact): at most every
+-- 10 minutes per node and one every 30 s in all, to spare the channel.
+local last_ask = -1e9
+function S.ask_key(hx, now_please)
+  local n = S.nodes[hx]
+  if not n or n.pub then return false end
+  if S.now - (n.info_at or -1e9) < 600 or (not now_please and S.now - last_ask < 30) then return false end
+  n.info_at, last_ask = S.now, S.now
+  S.send_nodeinfo(n.num, true)
+  return true
+end
 function S.position_soon() pos_left = 3 end
 
 local function send_position()  -- false when there is nothing to send yet
@@ -277,6 +311,7 @@ function S.traceroute(hx)
   if traces[hx] and S.now - traces[hx].at < 30 then shell.toast("Wait 30 s between traceroutes"); return end
   local id = S.send_channel(1, n.num, { portnum = mt.PORT.TRACEROUTE, payload = "", want_response = true })
   traces[hx] = { id = id, at = S.now }
+  S.ask_key(hx, true)
   n.trace = "waiting for a reply..."
   shell.toast("Traceroute sent")
 end
@@ -304,12 +339,13 @@ local function on_data(h, d, n, hx, ci)
     if bcast and ci then
       add(S.chat_lines(ci), chat_file(ci), S.name_of(hx) .. ": " .. text, "them")
       if not (tab == 1 and S.chan_sel == ci) then S.unread_chat = (S.unread_chat or 0) + 1 end
-      shell.sound("notify")
+      ding(S.listed("mesh_mute_ch", S.chan_name(ci)))
     elseif to_me then
+      local quiet = dm_quiet(hx)
       touch(hx)
       add(S.dm_lines(hx), dm_file(hx), S.name_of(hx) .. ": " .. text, "them")
       if not (tab == 3 and S.peer == hx) then S.unread[hx] = (S.unread[hx] or 0) + 1 end
-      shell.sound("notify")
+      ding(quiet)
     end
     if to_me and h.want_ack then send_ack(h, ci or 1, h.id) end
   elseif p == mt.PORT.NODEINFO then
@@ -326,11 +362,8 @@ local function on_data(h, d, n, hx, ci)
   elseif p == mt.PORT.POSITION then
     local pos = mt.decode_position(d.payload)
     if pos and math.abs(pos.lat) <= 90 and math.abs(pos.lon) <= 180 and (pos.lat ~= 0 or pos.lon ~= 0) then
-      n.lat, n.lon, n.alt, n.pos_at = pos.lat, pos.lon, pos.alt, S.now
+      n.lat, n.lon = pos.lat, pos.lon
     end
-  elseif p == mt.PORT.TELEMETRY then
-    local t = mt.decode_telemetry(d.payload)
-    if t then for k, v in pairs(t) do n[k] = v end end
   elseif p == mt.PORT.TRACEROUTE and to_me and d.request_id then
     local tr = traces[hx]
     local r = mt.decode_route(d.payload)
@@ -379,22 +412,15 @@ local function on_packet(pk)
       if d then ci = i end
     end
   end
-  if not d then
-    print(string.format("mesh: heard %s ch %02x, can't read it", mt.id_text(h.from), h.channel))
-    return
-  end
+  if not d then return end  -- another channel, or a key we don't have
   S.rx = S.rx + 1
   local n, hx = node(h.from)
   print(string.format("mesh: %s port %d ch %s %d dBm hops %s", mt.id_text(h.from), d.portnum, ci or "pki",
     math.floor(tonumber(pk.rssi) or 0), h.hop_start > 0 and (h.hop_start - h.hop_limit) or "?"))
-  local first = not n.long and not n.short
   n.rssi, n.snr, n.seen = tonumber(pk.rssi) or 0, tonumber(pk.snr) or 0, S.now
   n.hops = h.hop_start > 0 and (h.hop_start - h.hop_limit) or nil
   on_data(h, d, n, hx, ci)
-  if first and d.portnum ~= mt.PORT.NODEINFO and S.now - (n.info_at or -1e9) > 600 then
-    n.info_at = S.now
-    S.send_nodeinfo(h.from, true)  -- swap names and keys with a node we haven't met
-  end
+  S.ask_key(hx)  -- no key yet (and its NodeInfo didn't bring one): swap NodeInfo
 end
 
 -- ---------------------------------------------------------------- radio
@@ -470,6 +496,16 @@ function app.init()
   if last and S.is_contact(last) then S.peer = last end  -- the DMs tab opens where you left it
   S.start_radio()
   if gps then pcall(gps.start) end
+  -- what the background listener kept while Mesh was closed (meshsvc.cpp)
+  local inbox = sys.read_text(DIR .. "/inbox.txt")
+  if inbox and inbox ~= "" then
+    sys.write_text(DIR .. "/inbox.txt", "")
+    importing = true
+    for rssi, snr, hx in inbox:gmatch("(%-?%d+) (%-?[%d.]+) (%x+)") do
+      on_packet({ data = S.unhex(hx), rssi = tonumber(rssi), snr = tonumber(snr) })
+    end
+    importing = false
+  end
 end
 
 function app.update(dt)
@@ -494,6 +530,21 @@ function app.update(dt)
   if info_left <= 0 then info_left = NODEINFO_EVERY; S.send_nodeinfo(nil, false) end
   if pos_left <= 0 then pos_left = send_position() and POS_EVERY or 30 end
   if save_left <= 0 then save_left = 30; save_nodes() end
+  -- The screen makes garbage every frame; on a busy mesh it piled up faster
+  -- than the incremental collector cleared it (85 -> 102 KB in a few minutes).
+  -- A full collection every 15 s keeps the peak at what is really in use.
+  gc_left = gc_left - dt
+  if gc_left <= 0 then
+    gc_left = 15
+    local before = collectgarbage("count")
+    collectgarbage("collect")
+    S.gc_n = (S.gc_n or 0) + 1
+    if S.gc_n % 4 == 0 then
+      local n = 0
+      for _ in pairs(S.nodes) do n = n + 1 end
+      print(string.format("mesh mem: %.0f KB, %.0f after collecting, %d nodes", before, collectgarbage("count"), n))
+    end
+  end
 
   for k, w in pairs(waiting) do  -- three tries for a DM without an ACK
     if S.now >= w.at then
@@ -567,7 +618,7 @@ function app.draw()
   elseif not S.peer then
     if #crows == 0 then ui.empty("antenna", "No conversations yet", "Pick a node in Nodes, Enter")
     else ctop = ui.list(crows, csel, ctop, 4, 33, 229, 15, 6) end
-    ui.footer(#crows > 0 and { { "Enter", "Open" }, { "X", "Remove" }, { "Tab", "Setup" } }
+    ui.footer(#crows > 0 and { { "Enter", "Open" }, { "M", "Quiet" }, { "X", "Remove" } }
       or { { "Tab", "Setup" }, { "Esc", "Back" } })
   else
     draw_lines(S.dm_lines(S.peer), S.name_of(S.peer))
@@ -616,6 +667,9 @@ function app.key(k)
       if d == "up" then csel = math.max(1, csel - 1)
       elseif d == "down" then csel = math.min(#crows, csel + 1)
       elseif k.key == "enter" and hx then S.open_dm(hx)
+      elseif c == "m" and hx then
+        shell.toast(S.name_of(hx) .. (S.toggle("mesh_mute_dm", hx) and ": quiet" or ": sound on"))
+        build_contacts()
       elseif c == "x" and hx then
         shell.confirm("Remove " .. S.name_of(hx) .. "?", "From the list; the messages stay on the card.", function(yes)
           if yes then table.remove(S.contacts, csel); save_contacts(); build_contacts() end

@@ -1,5 +1,6 @@
 -- Mesh > Nodes: who's around (newest first) and a page per node with signal,
--- hops, battery and telemetry, position and distance, and a traceroute.
+-- hops, distance and direction (from their position and our GPS), and a
+-- traceroute.
 -- Loaded while the tab is open (see apps/mesh.lua for S).
 return function(S)
 local col = ui.col
@@ -7,16 +8,10 @@ local geo = require("geo_math")
 local rows, sel, top = {}, 1, 1
 local detail, lines = nil, {}  -- the node shown (hex) and its wrapped text
 local refresh = 0
-
 local function ago(t)
   local s = math.floor(S.now - t)
   if s < 60 then return s .. "s" elseif s < 3600 then return (s // 60) .. "m" end
   return (s // 3600) .. "h"
-end
-
-local function span(s)
-  if s >= 86400 then return (s // 86400) .. "d " .. (s % 86400 // 3600) .. "h" end
-  return (s // 3600) .. "h " .. (s % 3600 // 60) .. "m"
 end
 
 local function build_list()
@@ -47,11 +42,6 @@ local function build_detail()
   else
     t[#t + 1] = "Not heard since Mesh opened"
   end
-  if n.battery or n.voltage then
-    t[#t + 1] = "Battery " .. (n.battery and (n.battery > 100 and "on power" or n.battery .. "%") or "?")
-      .. (n.voltage and string.format(", %.2f V", n.voltage) or "") .. (n.uptime and (", up " .. span(n.uptime)) or "")
-  end
-  if n.temp then t[#t + 1] = string.format("Temp %.1f C%s", n.temp, n.humidity and string.format(", %d%% RH", math.floor(n.humidity + 0.5)) or "") end
   if n.lat then
     local where = string.format("At %.4f, %.4f", n.lat, n.lon)
     if S.fix then
@@ -60,7 +50,8 @@ local function build_detail()
     end
     t[#t + 1] = where
   end
-  t[#t + 1] = n.pub and "Key known: DMs are encrypted" or "No key yet: DMs ask for it first"
+  t[#t + 1] = n.pub and "Key known: DMs are encrypted"
+    or (n.info_at and S.now - n.info_at < 600 and "Asking for their key..." or "No key yet")
   if n.trace then t[#t + 1] = "Route: " .. n.trace end
   lines = {}
   for _, s in ipairs(t) do
@@ -103,7 +94,10 @@ function tab.key(k, d)
   end
   if d == "up" then sel = math.max(1, sel - 1)
   elseif d == "down" then sel = math.min(#rows, sel + 1)
-  elseif k.key == "enter" and rows[sel] then detail = rows[sel].hex; build_detail()
+  elseif k.key == "enter" and rows[sel] then
+    detail = rows[sel].hex
+    S.ask_key(detail, true)  -- opening a keyless node's page asks for its key
+    build_detail()
   else return false end
   return true
 end

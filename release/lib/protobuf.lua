@@ -114,12 +114,6 @@ function pb.s32(v)
   return v
 end
 
--- A decoded fixed32 read as a float (Meshtastic's float fields).
-function pb.float(v)
-  if v == nil then return nil end
-  return (string.unpack("<f", string.pack("<I4", v & M32)))
-end
-
 -- A packed repeated field (a length-delimited string) as a list: "fixed32"
 -- gives 32-bit values, anything else varints (low 32 bits).
 function pb.packed(s, kind)
