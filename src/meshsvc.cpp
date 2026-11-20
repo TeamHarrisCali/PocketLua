@@ -39,6 +39,7 @@ uint32_t seen[32][2];
 int seenAt = 0;
 uint8_t ack[48];
 size_t ackLen = 0;
+int ackTries = 0;
 uint32_t ackAt = 0;
 
 uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
@@ -272,7 +273,8 @@ void meshsvcTick() {
   size_t n = hwLoraRecv(buf, rssi, snr);
   if (n) onPacket(buf, n, rssi, snr);
   if (ackLen && !hwLoraBusy() && (int32_t)(now - ackAt) >= 0) {
-    hwLoraSend(ack, ackLen);
-    ackLen = 0;
+    // the channel busy or a packet waiting: try again shortly, for up to ~10 s
+    if (hwLoraSend(ack, ackLen) || ++ackTries > 30) ackLen = 0, ackTries = 0;
+    else ackAt = now + 150 + esp_random() % 300;
   }
 }

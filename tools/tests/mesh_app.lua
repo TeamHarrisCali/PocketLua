@@ -76,6 +76,13 @@ hear(ALICE, { portnum = mt.PORT.TEXT, payload = "hello mesh" })
 check(shows("ALB: hello mesh"), "a public message shows with the sender's short name")
 hear(0x55667788, { portnum = mt.PORT.TEXT, payload = "other channel" }, { ch = 0x3d })
 check(not shows("other channel"), "a channel we don't have is ignored")
+-- the radio declines while the channel is busy: the message waits and goes out
+local send0, refusals, got = lora.send, 2, nil
+lora.send = function(f) if refusals > 0 then refusals = refusals - 1; return false end; got = f; return true end
+type_text("busy channel test"); key("enter"); secs(2.5)
+local d0 = got and mt.decode_data(select(2, mt.unpack(got)))
+check(d0 and d0.payload == "busy channel test", "a message refused by a busy radio is retried, not dropped")
+lora.send = send0
 hw_calls = {}
 hear(0x77778888, { portnum = mt.PORT.POSITION, payload = mt.encode_position({ lat = 37.7, lon = -122.4 }) })
 secs(1)

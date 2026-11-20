@@ -26,6 +26,7 @@ local lines, kinds = {}, {}       -- wrapped chat lines and their colour kind
 local scroll = 0                  -- lines scrolled up from the bottom
 local input, blink = "", true
 local pending = nil               -- message waiting for the radio
+local send_tries = 0
 local peers = {}                  -- { call, lat, lon, alt, rssi, snr, seen }
 local rows, psel, ptop = {}, 1, 1
 local srows, ssel, stop_ = {}, 1, 1
@@ -204,10 +205,12 @@ function app.update(dt)
 
   beacon_left = beacon_left - dt
   if not lora.busy() then
-    if pending then
-      if send(pending) then add("me: " .. pending:match("^M|[^|]*|(.*)$"), "me")
-      else add("* Send failed", "sys") end
-      pending = nil
+    if pending then  -- the radio waits for a clear channel: keep trying for a few seconds
+      if send(pending) then add("me: " .. pending:match("^M|[^|]*|(.*)$"), "me"); pending, send_tries = nil, 0
+      else
+        send_tries = send_tries + 1
+        if send_tries > 90 then add("* Send failed: the channel stayed busy", "sys"); pending, send_tries = nil, 0 end
+      end
     elseif beacon_left <= 0 then
       if fix then
         send(string.format("P|%s|%.5f|%.5f|%d", call, fix.lat, fix.lon, math.floor((tonumber(fix.alt) or 0) + 0.5)))

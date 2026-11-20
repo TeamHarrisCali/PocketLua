@@ -1093,6 +1093,7 @@ static SX1262 *radio = nullptr;
 static Module *radioMod = nullptr;  // SX1262 does not own it
 static volatile bool radioFlag = false;
 static bool radioTx = false;
+static uint32_t txStart = 0, txAirMs = 0;  // the transmit in progress: when it started, its airtime
 static void IRAM_ATTR onRadio() { radioFlag = true; }
 
 static float optField(lua_State *L, const char *k, float def) {
@@ -1109,7 +1110,7 @@ static bool radioApp = false;
 
 static int radioBegin(const LoraParams &p) {
   m5::PI4IOE5V6408_Class ioe(0x43, 400000, &m5::In_I2C);
-  if (!ioe.begin()) return RADIOLIB_ERR_CHIP_NOT_FOUND;
+  if (!ioe.begin()) { usbdev::log("lora: cap not found (I2C 0x43)"); return RADIOLIB_ERR_CHIP_NOT_FOUND; }
   ioe.setDirection(0, true);
   ioe.setHighImpedance(0, false);
   ioe.digitalWrite(0, true);  // RF switch
@@ -1117,8 +1118,11 @@ static int radioBegin(const LoraParams &p) {
   // chip answers, and that is the SD card's bus
   if (!radio) radio = new SX1262(radioMod = new Module(5, 4, 3, 6, SPI));
   int st = radio->begin(p.freq, p.bw, p.sf, p.cr, p.sync, p.power, p.preamble, p.tcxo, true);
-  if (st != RADIOLIB_ERR_NONE && p.tcxo > 0) st = radio->begin(p.freq, p.bw, p.sf, p.cr, p.sync, p.power, p.preamble, 0, true);
-  if (st != RADIOLIB_ERR_NONE) return st;
+  if (st != RADIOLIB_ERR_NONE && p.tcxo > 0) {
+    usbdev::log(String("lora: begin with TCXO failed (") + st + "), trying a crystal");
+    st = radio->begin(p.freq, p.bw, p.sf, p.cr, p.sync, p.power, p.preamble, 0, true);
+  }
+  if (st != RADIOLIB_ERR_NONE) { usbdev::log(String("lora: begin failed (") + st + ")"); return st; }
   radio->setCurrentLimit(140);
   radio->setPacketReceivedAction(onRadio);
   radio->startReceive();
@@ -1143,22 +1147,45 @@ bool hwLoraBegin(const LoraParams &p) { return !radioApp && radioBegin(p) == RAD
 void hwLoraStop() { if (!radioApp) loraOff(); }
 bool hwLoraBusy() { return radio && radioTx; }
 
+// One interrupt line means "received", "sent" and "channel scanned". A packet
+// received just before a send left its flag set, and the send took it for
+// "done" and cut its own transmission short: on a busy mesh Mesh's messages
+// went unheard. So a send waits until no packet is waiting to be read and the
+// channel is quiet (CAD, as Meshtastic does), and only TX_DONE ends it.
 bool hwLoraSend(const uint8_t *buf, size_t len) {
-  if (!radio || radioTx) return false;
+  if (!radio || radioTx || radioFlag) return false;  // read what came in first
+  int cad = radio->scanChannel();  // a few symbols of listening
+  radioFlag = false;               // that was the scan's own interrupt
+  if (cad != RADIOLIB_CHANNEL_FREE) { radio->startReceive(); return false; }  // busy: try again shortly
+  if (len > 255) len = 255;
   radioTx = true;
-  return radio->startTransmit(buf, len > 255 ? 255 : len) == RADIOLIB_ERR_NONE;
+  txStart = millis();
+  txAirMs = radio->getTimeOnAir(len) / 1000;
+  if (radio->startTransmit(buf, len) != RADIOLIB_ERR_NONE) {
+    radioTx = false;
+    radio->startReceive();
+    return false;
+  }
+  return true;
 }
 
 // A received packet, or 0 bytes. Also finishes a transmit (call it often).
 size_t hwLoraRecv(uint8_t buf[256], float &rssi, float &snr) {
-  if (!radio || !radioFlag) return 0;
-  radioFlag = false;
+  if (!radio) return 0;
   if (radioTx) {
+    bool done = radioFlag && (radio->getIrqFlags() & (RADIOLIB_SX126X_IRQ_TX_DONE | RADIOLIB_SX126X_IRQ_TIMEOUT));
+    bool stuck = millis() - txStart > txAirMs + 1500;  // never finished: start listening again
+    if (radioFlag && !done) radioFlag = false;  // something else; keep waiting for TX_DONE
+    if (!done && !stuck) return 0;
+    if (stuck) usbdev::log(String("lora: transmit of ") + txAirMs + " ms never finished, radio reset");
+    radioFlag = false;
     radio->finishTransmit();
     radioTx = false;
     radio->startReceive();
     return 0;
   }
+  if (!radioFlag) return 0;
+  radioFlag = false;
   size_t n = radio->getPacketLength();
   if (n > 256) n = 256;
   int st = radio->readData(buf, n);

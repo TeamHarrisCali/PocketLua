@@ -560,10 +560,20 @@ function app.update(dt)
     end
   end
 
+  -- a frame leaves the queue once the radio takes it; the radio declines while
+  -- the channel is busy or a packet waits to be read, so it tries again shortly
   if #queue > 0 and not lora.busy() and S.now >= queue[1].at then
-    local q = table.remove(queue, 1)
+    local q = queue[1]
     local ok, r = pcall(lora.send, q.frame)
-    if ok and r ~= false then S.tx = S.tx + 1 end
+    if ok and r == true then
+      table.remove(queue, 1)
+      S.tx = S.tx + 1
+      print(string.format("mesh: sent %d bytes%s", #q.frame, (q.tries or 0) > 0 and (" after " .. q.tries .. " busy") or ""))
+    else
+      q.tries = (q.tries or 0) + 1
+      q.at = S.now + 0.15 + math.random() * 0.5
+      if q.tries > 40 then table.remove(queue, 1); print("mesh: gave up sending (channel busy)") end
+    end
   end
 
   if tab == 1 then S.unread_chat = nil end
