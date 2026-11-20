@@ -37,6 +37,9 @@ struct LoraParams {
 bool hwLoraCap();                     // the cap answers on I2C
 String hwLoraStatus();                // one line for the console (!lora)
 String hwLoraScan();                  // noise across the band (!lora scan)
+String hwLoraListen();                // receive-only check with no app (!lora listen)
+String hwLoraErrors();                // the SX1262's start-up error flags
+bool hwLoraRxOnly();                  // cfg lora_rx_only: nothing is ever sent
 bool hwLoraAppOwns();
 bool hwLoraBegin(const LoraParams &p);  // for the listener; false if an app has it or no radio
 void hwLoraStop();                    // the listener lets go (not an app's radio)

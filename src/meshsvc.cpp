@@ -159,6 +159,7 @@ bool start() {
 // Routing ACK (Data{portnum 5, payload 18 00, request_id, bitfield}) on the
 // public channel's key, sent a moment later
 void queueAck(uint32_t to, uint32_t reqId, uint8_t reqFlags) {
+  if (hwLoraRxOnly()) return;  // receive only: no receipts either (hwLoraSend would refuse anyway)
   int hopStart = reqFlags >> 5, hopLimit = reqFlags & 7;
   int limit = hopStart == 0 ? 0 : min(3, hopStart - hopLimit + 2);
   uint32_t id = esp_random();

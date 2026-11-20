@@ -1673,7 +1673,11 @@ static void conLine(String line) {
       reply("!end");
     } else if (cmd == "fput") conPut(arg);
     else if (cmd == "pins") reply(hwProbe());
-    else if (cmd == "lora") reply(arg == "scan" ? hwLoraScan() : hwLoraStatus());
+    else if (cmd == "lora") {
+      String r = arg == "scan" ? hwLoraScan() : arg == "listen" ? hwLoraListen() : hwLoraStatus();
+      int st = 0;
+      while (st < (int)r.length()) { int e = r.indexOf('\n', st); if (e < 0) e = r.length(); reply(r.substring(st, e)); st = e + 1; }
+    }
     else if (cmd == "sleep") { reply("sleeping: press G0 to wake"); sleepRequested = true; }
     else if (cmd == "bench") { reply("benchmarking crypto (a few seconds)..."); reply(tlsBench()); }
     else if (cmd == "run") { launch(arg); reply("ok"); }

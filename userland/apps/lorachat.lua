@@ -205,7 +205,10 @@ function app.update(dt)
 
   beacon_left = beacon_left - dt
   if not lora.busy() then
-    if pending then  -- the radio waits for a clear channel: keep trying for a few seconds
+    if pending and cfg.get("lora_rx_only") == "1" then  -- Mesh > Setup > Transmit: Off
+      add("* Receive only: not sent", "sys")
+      pending, send_tries = nil, 0
+    elseif pending then  -- the radio waits for a clear channel: keep trying for a few seconds
       if send(pending) then add("me: " .. pending:match("^M|[^|]*|(.*)$"), "me"); pending, send_tries = nil, 0
       else
         send_tries = send_tries + 1

@@ -176,10 +176,38 @@ key("enter"); frames(2)
 check(shows("hi alice"), "Enter on a contact reopens the conversation")
 key("tab"); frames(2)
 check(shows("Listen when closed"), "Setup has the background listener switch")
-for _ = 1, 7 do key("down") end
+for _ = 1, 8 do key("down") end
 frames(1)
 check(shows("DMs from new people"), "Setup has the DM sound row")
 check(shows("Channel 1") and shows("public"), "Setup lists the public channel")
+
+-- receive only switched on while a DM waits for its receipt: no retries
+lora.send = function() return true end  -- sent, so the DM waits for an ACK
+shell.launch("calc"); frames(3)
+shell.launch("mesh"); frames(3)
+key("tab"); key("tab"); frames(2)       -- DMs: it reopens the last conversation (Alice)
+type_text("retry me"); key("enter"); secs(1)
+check((sys.read_text("data/mesh/dm_11223344.txt") or ""):find("retry me", 1, true),
+  "the DM was sent (and filed) before receive only")
+lora.send = send0
+cfg.set("lora_rx_only", "1")
+hw_calls = {}
+secs(50)  -- three tries would have gone out by now
+check(#calls("lora_send") == 0, "receive only: a waiting DM isn't retransmitted")
+check(not (sys.read_text("data/mesh/dm_11223344.txt") or ""):find("must not", 1, true),
+  "receive only: nothing typed in receive only is filed as sent")
+cfg.set("lora_rx_only", nil)
+key("tab"); key("tab"); frames(1)       -- back to Chat
+
+-- receive only: nothing goes to the radio, typed or automatic
+cfg.set("lora_rx_only", "1")
+shell.launch("calc"); frames(3)
+hw_calls = {}
+shell.launch("mesh"); frames(3)
+check(shows("Receive only"), "receive only is announced in the chat")
+type_text("must not go"); key("enter"); secs(7)
+check(#calls("lora_send") == 0, "receive only: no message and no NodeInfo reach the radio")
+key("escape"); cfg.set("lora_rx_only", nil)
 
 shell.launch("calc"); frames(3)
 shell.launch("mesh"); frames(3)

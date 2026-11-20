@@ -1151,6 +1151,22 @@ bool hwLoraAppOwns() { return radioApp; }
 // For the console (!lora scan): the background level across the US band
 // (listening only), then back to the frequency in use. Noise on one
 // frequency is local interference; the same everywhere is the setup itself.
+// !lora listen: with no app using the radio, start it (receive only, Mesh's
+// LongFast settings), report its errors and the noise, and switch it off again.
+String hwLoraListen() {
+  if (radioApp) return "lora: an app has the radio; close it first";
+  bool mine = !radio;
+  if (mine) {
+    LoraParams p;
+    p.freq = 906.875f, p.bw = 250, p.sf = 11, p.cr = 5, p.sync = 0x2B, p.preamble = 16;
+    int st = radioBegin(p);
+    if (st != RADIOLIB_ERR_NONE) return String("lora: radio did not start (") + st + ")";
+  }
+  String out = String("lora: listening only. chip errors: ") + hwLoraErrors() + "\n" + hwLoraScan();
+  if (mine) loraOff();
+  return out;
+}
+
 String hwLoraScan() {
   if (!radio || radioTx) return "lora: not listening";
   String out = "lora: noise";
@@ -1170,6 +1186,22 @@ String hwLoraScan() {
 }
 
 // For the console (!lora): who has the radio, what it hears and has done.
+// The SX1262's own record of what failed at start (GetDeviceErrors, 0x17):
+// calibrations, the TCXO starting, the PLL locking, the PA ramp.
+String hwLoraErrors() {
+  if (!radio || !radioMod) return "no radio";
+  uint8_t d[2] = {0, 0};
+  if (radioMod->SPIreadStream(0x17, d, 2) != RADIOLIB_ERR_NONE) return "could not read";
+  uint16_t e = (uint16_t)d[0] << 8 | d[1];
+  if (!e) return "none";
+  static const char *NAMES[] = {"RC64K calibration", "RC13M calibration", "PLL calibration", "ADC calibration",
+                                "image calibration", "TCXO/crystal start", "PLL lock", "?", "PA ramp"};
+  String out;
+  for (int b = 0; b < 9; b++)
+    if (e & (1 << b)) out += (out.length() ? ", " : "") + String(NAMES[b]);
+  return out + " (0x" + String(e, HEX) + ")";
+}
+
 String hwLoraStatus() {
   if (!radio) return "lora: off";
   m5::PI4IOE5V6408_Class ioe(0x43, 400000, &m5::In_I2C);
@@ -1177,7 +1209,8 @@ String hwLoraStatus() {
   return String("lora: ") + (radioApp ? "app" : "listener") + (radioTx ? ", sending" : ", listening") +
          ", channel now " + String(radio->getRSSI(false), 1) + " dBm, irq 0x" + String(radio->getIrqFlags(), HEX) +
          ", rx ok " + rxGood + " bad " + rxBad + (rxBad ? String(" (last ") + lastBad + ")" : "") + ", tx done " + txDone +
-         ", cap " + (cap ? String("rf switch ") + (ioe.getWriteValue(0) ? "on" : "OFF") : "MISSING");
+         ", cap " + (cap ? String("rf switch ") + (ioe.getWriteValue(0) ? "on" : "OFF") : "MISSING") +
+         ", chip errors: " + hwLoraErrors() + (hwLoraRxOnly() ? ", RECEIVE ONLY" : "");
 }
 bool hwLoraBegin(const LoraParams &p) { return !radioApp && radioBegin(p) == RADIOLIB_ERR_NONE; }
 void hwLoraStop() { if (!radioApp) loraOff(); }
@@ -1188,7 +1221,17 @@ bool hwLoraBusy() { return radio && radioTx; }
 // "done" and cut its own transmission short: on a busy mesh Mesh's messages
 // went unheard. So a send waits until no packet is waiting to be read and the
 // channel is quiet (CAD, as Meshtastic does), and only TX_DONE ends it.
+// Receive only (cfg lora_rx_only = 1, Mesh > Setup > Transmit): nothing is
+// sent, whoever asks. Every transmit in the firmware goes through here (apps
+// via lora.send, the Mesh listener's ACKs), so this one check is the lock.
+bool hwLoraRxOnly() { return cfgGet("lora_rx_only") == "1"; }
+
 bool hwLoraSend(const uint8_t *buf, size_t len) {
+  if (hwLoraRxOnly()) {
+    static uint32_t lastNote = 0;
+    if (millis() - lastNote > 10000) { lastNote = millis(); usbdev::log("lora: receive only, nothing sent"); }
+    return false;
+  }
   if (!radio || radioTx || radioFlag) return false;  // read what came in first
   int cad = radio->scanChannel();  // a few symbols of listening
   radioFlag = false;               // that was the scan's own interrupt

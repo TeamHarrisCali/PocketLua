@@ -52,6 +52,7 @@ local function build()
     { label = "Preset", value = S.preset and S.preset.name or "?" },
     { label = "Share position", value = POS_MODES[S.pos_mode] },
     { label = "Listen when closed", value = cfg.get("mesh_bg") == "1" and "On" or "Off", bg = true },
+    { label = "Transmit", value = S.rx_only() and "Off (receive only)" or "On", tx = true },
     { label = "DMs from new people", value = cfg.get("mesh_dm_new") == "0" and "Quiet" or "Sound", dmnew = true },
     { label = "Alert volume", value = (function(v) return v == 0 and "Off" or v .. "%" end)(tonumber(cfg.get("mesh_vol")) or 25),
       vol = true },
@@ -142,6 +143,15 @@ local function change(r, d)
     S.position_soon()
     shell.toast(S.pos_mode == 1 and "Position not shared" or S.pos_mode == 2 and "Sharing an approximate position (~5 km)"
       or "Sharing your exact position", 2)
+  elseif r.tx then
+    if S.rx_only() then
+      shell.confirm("Transmit again?", "Only with the antenna on: sending without one can damage the radio.", function(yes)
+        if yes then cfg.set("lora_rx_only", nil); shell.toast("Transmit on", 2); build() end
+      end)
+    else
+      cfg.set("lora_rx_only", "1")
+      shell.toast("Receive only: nothing will be sent", 2)
+    end
   elseif r.bg then
     local on = cfg.get("mesh_bg") ~= "1"
     cfg.set("mesh_bg", on and "1" or "0")

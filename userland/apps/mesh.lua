@@ -233,7 +233,12 @@ local function header(to, want_ack, hop_limit, channel)
     want_ack = want_ack, channel = channel, relay = mt.last_byte(S.me) }
 end
 
+-- Receive only (Setup > Transmit: Off, cfg lora_rx_only): nothing is queued,
+-- automatic sends included. The firmware refuses to transmit as well.
+function S.rx_only() return cfg.get("lora_rx_only") == "1" end
+
 local function enqueue(h, payload)
+  if S.rx_only() then return { frame = "" } end
   hist.check(S.me, h.id)
   local q = { frame = mt.pack(h, payload), at = S.now + 0.05 + math.random() * 0.25 }
   queue[#queue + 1] = q
@@ -443,6 +448,7 @@ function S.start_radio()
   S.radio_err = not S.radio_ok and tostring(ok and (e or "LoRa radio not found") or r) or nil
   if S.radio_ok then
     push(S.chat_lines(1), string.format("* %s %.3f MHz (slot %d) as %s", p.name, S.freq, slot, mt.id_text(S.me)), "sys")
+    if S.rx_only() then push(S.chat_lines(1), "* Receive only: nothing will be sent (Setup > Transmit)", "sys") end
     info_left = 5
   end
 end
@@ -551,6 +557,10 @@ function app.update(dt)
     end
   end
 
+  if S.rx_only() then  -- nothing queued, nothing retried: DMs still waiting are given up
+    if #queue > 0 then queue = {} end
+    for k, w in pairs(waiting) do w.line.status, w.line[2], waiting[k] = "fail", "fail", nil end
+  end
   for k, hb in pairs(heard) do  -- a public message nobody relayed within 30 s
     if S.now >= hb.at then hb.line.status, heard[k] = "unheard", nil end
   end
@@ -569,7 +579,7 @@ function app.update(dt)
 
   -- a frame leaves the queue once the radio takes it; the radio declines while
   -- the channel is busy or a packet waits to be read, so it tries again shortly
-  if #queue > 0 and not lora.busy() and S.now >= queue[1].at then
+  if #queue > 0 and not S.rx_only() and not lora.busy() and S.now >= queue[1].at then
     local q = queue[1]
     local ok, r = pcall(lora.send, q.frame)
     if ok and r == true then
@@ -713,6 +723,7 @@ function app.key(k)
       return true
     end
     S.unread[S.peer] = nil
+    if k.key == "enter" and S.rx_only() then shell.toast("Receive only: turn Transmit on in Setup"); return true end
     if k.key == "esc" and input == "" then  -- back to the contact list
       S.peer = nil
       cfg.set("mesh_peer", nil)
@@ -726,6 +737,7 @@ function app.key(k)
     scroll = 0
     return true
   end
+  if k.key == "enter" and S.rx_only() then shell.toast("Receive only: turn Transmit on in Setup"); return true end
   return type_key(k, d, function(t)
     local id = S.send_channel(S.chan_sel, mt.BROADCAST, { portnum = mt.PORT.TEXT, payload = t })
     local line = add(S.chat_lines(S.chan_sel), chat_file(S.chan_sel), "me: " .. t, "me")
