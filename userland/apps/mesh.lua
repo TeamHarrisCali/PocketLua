@@ -547,6 +547,9 @@ function app.update(dt)
   gc_left = gc_left - dt
   if gc_left <= 0 then
     gc_left = 15
+    -- the channel's background level, for finding interference (on battery too: it's in the SD log)
+    local nz = lora.noise and lora.noise()
+    if nz then print(string.format("mesh noise: %d dBm", math.floor(nz + 0.5))) end
     local before = collectgarbage("count")
     collectgarbage("collect")
     S.gc_n = (S.gc_n or 0) + 1
