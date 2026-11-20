@@ -36,6 +36,7 @@ struct LoraParams {
 };
 bool hwLoraCap();                     // the cap answers on I2C
 String hwLoraStatus();                // one line for the console (!lora)
+String hwLoraScan();                  // noise across the band (!lora scan)
 bool hwLoraAppOwns();
 bool hwLoraBegin(const LoraParams &p);  // for the listener; false if an app has it or no radio
 void hwLoraStop();                    // the listener lets go (not an app's radio)

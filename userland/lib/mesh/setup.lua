@@ -7,6 +7,7 @@ local col = ui.col
 local POS_MODES = { "Off", "Approx", "Precise" }
 local VOLS = { 0, 10, 25, 50, 100 }  -- Mesh alerts, percent of the volume (cfg mesh_vol)
 local rows, sel, top = {}, 1, 1
+local noise = nil  -- smoothed channel level, dBm
 local refresh = 0
 
 -- ---------------------------------------------------------------- base64
@@ -61,6 +62,14 @@ local function build()
       badge = quiet and "Q" or nil }
   end
   if #S.channels < 8 then rows[#rows + 1] = { label = "+ Add private channel", add = true } end
+  -- the channel's background level: about -115 dBm is quiet; -95 and up
+  -- (a laptop, charger or LED lights near the antenna) hides most nodes
+  local nz = lora and lora.noise and lora.noise()
+  if nz then
+    noise = noise and noise * 0.7 + nz * 0.3 or nz
+    rows[#rows + 1] = { label = "Channel noise", value = string.format("%d dBm%s", math.floor(noise + 0.5),
+      noise > -100 and " (noisy)" or noise > -108 and " (fair)" or " (quiet)"), dim = true }
+  end
   rows[#rows + 1] = { label = "Node", value = S.mt.id_text(S.me), dim = true }
   rows[#rows + 1] = { label = "Packets", value = "TX " .. S.tx .. "  RX " .. S.rx, dim = true }
   sel = math.max(1, math.min(sel, #rows))

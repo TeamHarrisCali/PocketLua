@@ -1095,6 +1095,7 @@ static volatile bool radioFlag = false;
 static bool radioTx = false;
 static uint32_t txStart = 0, txAirMs = 0;  // the transmit in progress: when it started, its airtime
 static uint32_t rxGood = 0, rxBad = 0, txDone = 0, lastBadLog = 0;
+static float radioFreq = 0;  // the frequency in use (for !lora scan to go back to)
 static int lastBad = 0;
 static void IRAM_ATTR onRadio() { radioFlag = true; }
 
@@ -1119,6 +1120,7 @@ static int radioBegin(const LoraParams &p) {
   // given the bus rather than owning it: RadioLib ends a bus it owns when no
   // chip answers, and that is the SD card's bus
   if (!radio) radio = new SX1262(radioMod = new Module(5, 4, 3, 6, SPI));
+  radioFreq = p.freq;
   int st = radio->begin(p.freq, p.bw, p.sf, p.cr, p.sync, p.power, p.preamble, p.tcxo, true);
   if (st != RADIOLIB_ERR_NONE && p.tcxo > 0) {
     usbdev::log(String("lora: begin with TCXO failed (") + st + "), trying a crystal");
@@ -1145,6 +1147,27 @@ bool hwLoraCap() {
   return ioe.begin();
 }
 bool hwLoraAppOwns() { return radioApp; }
+
+// For the console (!lora scan): the background level across the US band
+// (listening only), then back to the frequency in use. Noise on one
+// frequency is local interference; the same everywhere is the setup itself.
+String hwLoraScan() {
+  if (!radio || radioTx) return "lora: not listening";
+  String out = "lora: noise";
+  const float FREQS[] = {902.5, 904.0, 906.875, 909.0, 912.0, 915.0, 918.0, 921.0, 924.0, 927.0};
+  for (float f : FREQS) {
+    radio->setFrequency(f);
+    radio->startReceive();
+    delay(30);
+    float sum = 0;
+    for (int i = 0; i < 8; i++) { sum += radio->getRSSI(false); delay(5); }
+    out += String(" ") + String(f, 1) + ":" + String(sum / 8, 0);
+  }
+  radio->setFrequency(radioFreq);
+  radio->startReceive();
+  radioFlag = false;
+  return out;
+}
 
 // For the console (!lora): who has the radio, what it hears and has done.
 String hwLoraStatus() {
@@ -1272,6 +1295,14 @@ static int lo_recv(lua_State *L) {
 
 static int lo_busy(lua_State *L) { lua_pushboolean(L, radioTx); return 1; }
 
+// noise() -> the channel's level now in dBm (listening, nothing received), or nil.
+// Around -115 is a quiet channel; much higher is interference, which deafens it.
+static int lo_noise(lua_State *L) {
+  if (!radioApp || !radio || radioTx) { lua_pushnil(L); return 1; }
+  lua_pushnumber(L, radio->getRSSI(false));
+  return 1;
+}
+
 static int lo_stop(lua_State *L) { loraOff(); radioApp = false; return 0; }
 
 // =============================================================== GPS (Cap LoRa-1262)
@@ -1380,7 +1411,7 @@ static const luaL_Reg i2cLib[] = {{"scan", i2_scan}, {"read", i2_read}, {"write"
                                   {"read_reg", i2_read_reg}, {"write_reg", i2_write_reg}, {nullptr, nullptr}};
 static const luaL_Reg httpLib[] = {{"get", ht_get}, {"download", ht_download}, {"dns", ht_dns}, {"ping", ht_ping}, {nullptr, nullptr}};
 static const luaL_Reg loraLib[] = {{"begin", lo_begin}, {"send", lo_send}, {"recv", lo_recv},
-                                   {"busy", lo_busy}, {"stop", lo_stop}, {nullptr, nullptr}};
+                                   {"busy", lo_busy}, {"noise", lo_noise}, {"stop", lo_stop}, {nullptr, nullptr}};
 static const luaL_Reg gpsLib[] = {{"start", gp_start}, {"stop", gp_stop}, {"read", gp_read}, {nullptr, nullptr}};
 static const luaL_Reg dispLib[] = {{"image", di_image}, {"fill", di_fill}, {"text", di_text}, {nullptr, nullptr}};
 extern const luaL_Reg musiclibFns[];  // musiclib.cpp
