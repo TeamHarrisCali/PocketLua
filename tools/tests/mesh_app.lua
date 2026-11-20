@@ -76,13 +76,6 @@ hear(ALICE, { portnum = mt.PORT.TEXT, payload = "hello mesh" })
 check(shows("ALB: hello mesh"), "a public message shows with the sender's short name")
 hear(0x55667788, { portnum = mt.PORT.TEXT, payload = "other channel" }, { ch = 0x3d })
 check(not shows("other channel"), "a channel we don't have is ignored")
--- the radio declines while the channel is busy: the message waits and goes out
-local send0, refusals, got = lora.send, 2, nil
-lora.send = function(f) if refusals > 0 then refusals = refusals - 1; return false end; got = f; return true end
-type_text("busy channel test"); key("enter"); secs(2.5)
-local d0 = got and mt.decode_data(select(2, mt.unpack(got)))
-check(d0 and d0.payload == "busy channel test", "a message refused by a busy radio is retried, not dropped")
-lora.send = send0
 hw_calls = {}
 hear(0x77778888, { portnum = mt.PORT.POSITION, payload = mt.encode_position({ lat = 37.7, lon = -122.4 }) })
 secs(1)
@@ -102,6 +95,36 @@ for _, s in ipairs(sent()) do
 end
 check(info and info.role == mt.ROLE_CLIENT_MUTE and info.hw_model == mt.HW_PRIVATE and info.public_key
   and #info.public_key == 32, "announces itself: NodeInfo with role, hardware and public key")
+
+-- the radio declines while the channel is busy: the message waits and goes out
+local send0, refusals, got = lora.send, 2, nil
+lora.send = function(f)
+  if refusals > 0 then refusals = refusals - 1; return false end
+  local dd = mt.decode_data(select(2, mt.unpack(f)))
+  if dd and dd.payload == "busy channel test" then got = f end
+  return send0(f)  -- recorded as usual
+end
+type_text("busy channel test"); key("enter"); secs(2.5)
+local d0 = got and mt.decode_data(select(2, mt.unpack(got)))
+check(d0 and d0.payload == "busy channel test", "a message refused by a busy radio is retried, not dropped")
+lora.send = send0
+-- heard: our own packet coming back from a relay marks the message heard
+local mine = got and select(1, mt.unpack(got))
+local ticks2 = 0
+local gl0 = gfx.line
+gfx.line = function(x1, y1, x2, y2, c, ...) if c == ui.col.good and x1 >= 227 then ticks2 = ticks2 + 1 end; return gl0(x1, y1, x2, y2, c, ...) end
+frames(1)
+check(ticks2 == 0, "a public message isn't marked heard before a relay")
+if mine then
+  mine.hop_limit = mine.hop_limit - 1
+  queue[#queue + 1] = { data = mt.pack(mine, select(2, mt.unpack(got))), rssi = -60, snr = 8 }
+end
+ticks2 = 0; frames(2)
+check(ticks2 >= 2, "hearing a node relay it draws the green heard tick")
+gfx.line = gl0
+type_text("nobody hears this"); key("enter"); secs(32)
+check(shows("^%?$"), "a public message nobody relayed in 30 s shows ?")
+
 
 hear(ALICE, { portnum = mt.PORT.POSITION, payload = mt.encode_position({ lat = 37.78, lon = -122.41 }) }, { hops = 1 })
 key("tab"); frames(2)

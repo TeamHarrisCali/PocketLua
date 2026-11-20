@@ -36,6 +36,7 @@ local hist = mt.history(64)  -- (from, id) of recent packets: we never relay, so
 local nodes_dirty = false
 local scroll, input, blink = 0, "", true
 local queue, waiting, traces = {}, {}, {}
+local heard = {}  -- our public messages waiting to be heard relayed: id hex -> { line, at }
 local crows, csel, ctop = {}, 1, 1  -- the DMs tab's contact list
 local gps_left, info_left, pos_left, save_left, gc_left = 0, 5, 60, 30, 15
 
@@ -392,8 +393,11 @@ local function on_packet(pk)
   local h, payload = mt.unpack(tostring(pk.data or ""))
   if not h then return end
   if mt.same(h.from, S.me) then  -- a relay of ours: it reached the mesh
-    local w = waiting[pb.hex32(h.id)]
+    local k = pb.hex32(h.id)
+    local w = waiting[k]
     if w then w.relayed = true end
+    local hb = heard[k]
+    if hb then hb.line.status, heard[k] = "heard", nil end
     return
   end
   if not hist.check(h.from, h.id) then return end
@@ -547,6 +551,9 @@ function app.update(dt)
     end
   end
 
+  for k, hb in pairs(heard) do  -- a public message nobody relayed within 30 s
+    if S.now >= hb.at then hb.line.status, heard[k] = "unheard", nil end
+  end
   for k, w in pairs(waiting) do  -- three tries for a DM without an ACK
     if S.now >= w.at then
       if w.tries >= 3 then
@@ -605,8 +612,9 @@ local function draw_lines(list, label)
       local st = l.status
       if st == "wait" then ui.text(228, y, "..", col.muted)
       elseif st == "fail" then ui.text(231, y, "!", col.warn)
-      elseif st then  -- a tick when the mesh relayed it, two when they confirmed
-        local c = st == "ok" and col.good or col.muted
+      elseif st == "unheard" then ui.text(231, y, "?", col.muted)
+      elseif st then  -- a tick when the mesh relayed it (green for a public message), two when they confirmed
+        local c = (st == "ok" or st == "heard") and col.good or col.muted
         gfx.line(227, y + 4, 229, y + 6, c); gfx.line(229, y + 6, 233, y + 1, c)
         if st == "ok" then gfx.line(232, y + 6, 236, y + 1, c) end
       end
@@ -719,8 +727,10 @@ function app.key(k)
     return true
   end
   return type_key(k, d, function(t)
-    S.send_channel(S.chan_sel, mt.BROADCAST, { portnum = mt.PORT.TEXT, payload = t })
-    add(S.chat_lines(S.chan_sel), chat_file(S.chan_sel), "me: " .. t, "me")
+    local id = S.send_channel(S.chan_sel, mt.BROADCAST, { portnum = mt.PORT.TEXT, payload = t })
+    local line = add(S.chat_lines(S.chan_sel), chat_file(S.chan_sel), "me: " .. t, "me")
+    line.status = "wait"  -- until another node is heard relaying it (Meshtastic's implicit ACK)
+    heard[pb.hex32(id)] = { line = line, at = S.now + 30 }
   end)
 end
 

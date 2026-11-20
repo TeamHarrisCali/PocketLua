@@ -1094,6 +1094,8 @@ static Module *radioMod = nullptr;  // SX1262 does not own it
 static volatile bool radioFlag = false;
 static bool radioTx = false;
 static uint32_t txStart = 0, txAirMs = 0;  // the transmit in progress: when it started, its airtime
+static uint32_t rxGood = 0, rxBad = 0, txDone = 0, lastBadLog = 0;
+static int lastBad = 0;
 static void IRAM_ATTR onRadio() { radioFlag = true; }
 
 static float optField(lua_State *L, const char *k, float def) {
@@ -1143,6 +1145,17 @@ bool hwLoraCap() {
   return ioe.begin();
 }
 bool hwLoraAppOwns() { return radioApp; }
+
+// For the console (!lora): who has the radio, what it hears and has done.
+String hwLoraStatus() {
+  if (!radio) return "lora: off";
+  m5::PI4IOE5V6408_Class ioe(0x43, 400000, &m5::In_I2C);
+  bool cap = ioe.begin();
+  return String("lora: ") + (radioApp ? "app" : "listener") + (radioTx ? ", sending" : ", listening") +
+         ", channel now " + String(radio->getRSSI(false), 1) + " dBm, irq 0x" + String(radio->getIrqFlags(), HEX) +
+         ", rx ok " + rxGood + " bad " + rxBad + (rxBad ? String(" (last ") + lastBad + ")" : "") + ", tx done " + txDone +
+         ", cap " + (cap ? String("rf switch ") + (ioe.getWriteValue(0) ? "on" : "OFF") : "MISSING");
+}
 bool hwLoraBegin(const LoraParams &p) { return !radioApp && radioBegin(p) == RADIOLIB_ERR_NONE; }
 void hwLoraStop() { if (!radioApp) loraOff(); }
 bool hwLoraBusy() { return radio && radioTx; }
@@ -1181,6 +1194,7 @@ size_t hwLoraRecv(uint8_t buf[256], float &rssi, float &snr) {
     radioFlag = false;
     radio->finishTransmit();
     radioTx = false;
+    if (done) txDone++;
     radio->startReceive();
     return 0;
   }
@@ -1192,7 +1206,18 @@ size_t hwLoraRecv(uint8_t buf[256], float &rssi, float &snr) {
   rssi = radio->getRSSI();
   snr = radio->getSNR();
   radio->startReceive();
-  return st == RADIOLIB_ERR_NONE ? n : 0;
+  if (st != RADIOLIB_ERR_NONE) {  // CRC or header errors: logged, at most every 10 s
+    rxBad++;
+    lastBad = st;
+    if (millis() - lastBadLog > 10000) {
+      lastBadLog = millis();
+      usbdev::log(String("lora: ") + rxBad + " packet(s) failed to read (last " + st + ", " + (int)rssi + " dBm, SNR " +
+                  String(snr, 1) + ")");
+    }
+    return 0;
+  }
+  rxGood++;
+  return n;
 }
 
 // begin([freq_mhz=915][, sf=9][, power_dbm=14]) -> true | false, error

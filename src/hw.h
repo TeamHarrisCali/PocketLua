@@ -2,6 +2,7 @@
 #include <lua.hpp>
 #include <stddef.h>
 #include <stdint.h>
+#include <WString.h>
 
 // Hardware drivers exposed to Lua: audio, ir, i2c, http, lora, gps, disp.
 // Everything is started on first use and released again, because RAM is the
@@ -34,6 +35,7 @@ struct LoraParams {
   int sf = 9, cr = 5, sync = 0x12, preamble = 12, power = 14;
 };
 bool hwLoraCap();                     // the cap answers on I2C
+String hwLoraStatus();                // one line for the console (!lora)
 bool hwLoraAppOwns();
 bool hwLoraBegin(const LoraParams &p);  // for the listener; false if an app has it or no radio
 void hwLoraStop();                    // the listener lets go (not an app's radio)
