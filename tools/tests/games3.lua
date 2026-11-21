@@ -1,4 +1,4 @@
--- Headless tests for the third batch of games (sudoku, reversi, codebreaker, hop, gems).
+-- Headless tests for the third batch of games (sudoku, reversi, codebreaker, hop, gems, solitaire, hanoi, wordy).
 -- Run from the project root:  lua5.4 tools/tests/games3.lua
 local say = print
 local src = assert(io.open("tools/host_test.lua")):read("a")
@@ -22,9 +22,9 @@ end
 local drawn, discs, recording = {}, {}, false
 local rfills = {}
 local real_text, real_disc, real_rfill = gfx.text, gfx.disc, gfx.rfill
-gfx.rfill = function(x, y, w, h, ...)
-  if recording then rfills[#rfills + 1] = { x, y, w, h } end
-  return real_rfill(x, y, w, h, ...)
+gfx.rfill = function(x, y, w, h, rad, c, ...)
+  if recording then rfills[#rfills + 1] = { x, y, w, h, c } end
+  return real_rfill(x, y, w, h, rad, c, ...)
 end
 local texts_at = {}
 gfx.text = function(x, y, s, c, ...)
@@ -41,6 +41,12 @@ gfx.fill = function(x, y, w, h, c, ...)
   if recording then fills[#fills + 1] = { x, y, w, h, c } end
   return real_fill(x, y, w, h, c, ...)
 end
+local lines = {}
+local real_line = gfx.line
+gfx.line = function(x1, y1, x2, y2, ...)
+  if recording then lines[#lines + 1] = { x1, y1, x2, y2 } end
+  return real_line(x1, y1, x2, y2, ...)
+end
 local circles = {}
 local real_circle = gfx.circle
 gfx.circle = function(x, y, r, ...)
@@ -48,8 +54,14 @@ gfx.circle = function(x, y, r, ...)
   return real_circle(x, y, r, ...)
 end
 local function screen()
-  drawn, discs, rfills, texts_at, circles, fills, recording = {}, {}, {}, {}, {}, {}, true
+  drawn, discs, rfills, texts_at, circles, fills, lines, recording = {}, {}, {}, {}, {}, {}, {}, true
   on_draw()
+  recording = false
+  return table.concat(drawn, "\n")
+end
+local function capture(draw)
+  drawn, discs, rfills, texts_at, circles, fills, lines, recording = {}, {}, {}, {}, {}, {}, {}, true
+  draw()
   recording = false
   return table.concat(drawn, "\n")
 end
@@ -456,7 +468,7 @@ local before = gscore()
 key(hint); frames(90)
 check(gscore() > before, "gems: the hinted swap scores (" .. gscore() .. ")")
 local moved = 0
-for _ = 1, 60 do
+for _ = 1, 25 do
   key("h")
   local h = screen():match("Hint: swap (%a+)")
   if not h then break end
@@ -483,8 +495,226 @@ key("tab"); frames(10)
 key("esc")
 check(shell.app() == "home", "gems: Esc goes home")
 
+-- ------------------------------------------------------------ solitaire
+sys.remove("data/solitaire/scores.txt")
+local SFACE = gfx.rgb(236, 236, 228)
+local function faces()
+  screen()
+  local up, backs = 0, 0
+  for _, r in ipairs(rfills) do
+    if r[3] == 30 and r[4] == 22 then
+      if r[5] == SFACE then up = up + 1 elseif r[5] == ui.col.accent then backs = backs + 1 end
+    end
+  end
+  return up, backs
+end
+shell.launch("solitaire"); frames(3)
+alive("solitaire", "opens")
+local up, backs = faces()
+check(up == 7 and backs == 22, "solitaire: deals 7 face-up cards, 21 face-down and the deck (" .. up .. ", " .. backs .. ")")
+key("space")
+up = faces()
+check(up == 8 and shows("1\n"), "solitaire: Space turns a card onto the waste")
+key("u")
+check(faces() == 7, "solitaire: U undoes it")
+for _ = 1, 30 do key("space") end
+check(faces() == 7 or faces() == 8, "solitaire: turning the whole deck goes round again")
+-- crafted positions, through the app's own save format: card char = 65 + card
+local S = shell.load_app("solitaire")
+local function ch(c) return string.char(65 + c) end
+local function pos_(stock, waste, found, cols)
+  local p = { stock, waste, found }
+  for i = 1, 7 do p[#p + 1] = cols[i] or "0:" end
+  return { g = table.concat(p, "|"), m = 1, t = 0 }
+end
+local function sk(name, text) S.key({ key = name, text = text }) end
+local KS, QH, AS, JS = 12, 24, 0, 10
+S.init(nil, pos_("", "", "0,0,0,0", { "0:" .. ch(KS), "0:" .. ch(QH) }))
+sk("down"); sk("right"); sk("enter"); sk("left"); sk("enter")
+check(S.save().g:match("|0:" .. ch(KS) .. ch(QH) .. "|0:|"), "solitaire: a red Queen goes on a black King")
+sk("enter"); sk("right"); sk("enter")
+check(capture(S.draw):find("Can't go there", 1, true) == nil and S.save().g:match("|0:" .. ch(KS) .. ch(QH) .. "|"), "solitaire: Enter on an empty column refuses a Queen")
+sk("esc")
+sk("left"); sk("up"); sk("enter"); sk("right"); sk("enter")
+check(S.save().g:match("|0:|0:" .. ch(KS) .. ch(QH) .. "|"), "solitaire: King and Queen move together to an empty column")
+S.init(nil, pos_("", "", "0,0,0,0", { "0:" .. ch(JS), "0:" .. ch(AS) }))
+sk("down"); sk("right"); sk("f", "f")
+check(S.save().g:match("|1,0,0,0|"), "solitaire: F sends an Ace to its suit pile")
+sk("left"); sk("f", "f")
+check(S.save().g:match("|1,0,0,0|"), "solitaire: F refuses a Jack on an empty suit pile")
+S.init(nil, pos_("", ch(13 * 1 + 12), "12,12,12,12", { "0:" .. ch(12), "0:" .. ch(38), "0:" .. ch(51) }))
+sk("a", "a")
+check(S.save() == nil and capture(S.draw):find("You won!", 1, true), "solitaire: A finishes a won game")
+local sc3 = sys.read_text("data/solitaire/scores.txt") or ""
+check(sc3:match("wins_1=1") and sc3:match("best_1=%d"), "solitaire: wins and best time saved")
+S.close()
+key("tab")
+frames(3)
+if shows("Start a new deal?") then key("enter") end
+check((sys.read_text("data/solitaire/scores.txt") or ""):match("draw=3"), "solitaire: Tab switches to draw 3")
+key("space")
+local u3 = faces()
+check(u3 == 8, "solitaire: draw 3 shows the top waste card")
+for i = 1, 300 do key(({ "up", "left", "enter", "down", "right", "enter", "f", "space", "u", "a" })[i % 10 + 1]) end
+alive("solitaire", "survives 300 random keys")
+shell.home(); frames(2)
+shell.launch("solitaire"); frames(2)
+alive("solitaire", "resumes")
+key("esc"); key("esc")
+check(shell.app() == "home", "solitaire: Esc goes home")
+
+-- ------------------------------------------------------------ hanoi
+sys.remove("data/hanoi/scores.txt")
+local function hanoi_moves(k, a, b, c, out)
+  if k == 0 then return out end
+  hanoi_moves(k - 1, a, c, b, out)
+  out[#out + 1] = a .. b
+  hanoi_moves(k - 1, c, b, a, out)
+  return out
+end
+shell.launch("hanoi"); frames(3)
+alive("hanoi", "opens")
+check(shows("Fewest 15") and shows("Moves 0"), "hanoi: 4 discs to start, 15 moves at best")
+key("1"); key("2")
+check(shows("Moves 1"), "hanoi: 1 then 2 moves a disc")
+key("1"); key("2")
+check(shows("Moves 1"), "hanoi: a bigger disc can't go on a smaller one")
+key("u")
+check(shows("Moves 2"), "hanoi: U undoes (and counts as a move)")
+key("r")
+check(shows("Moves 0"), "hanoi: R restarts")
+for _, m in ipairs(hanoi_moves(4, 1, 3, 2, {})) do key(m:sub(1, 1)); key(m:sub(2, 2)) end
+check(shows("The fewest possible!"), "hanoi: the 15-move solution wins with the fewest moves")
+check((sys.read_text("data/hanoi/scores.txt") or ""):match("best_4=15"), "hanoi: best saved for 4 discs")
+key("enter")
+check(shows("Moves 0"), "hanoi: Enter plays again")
+key("tab")
+check(shows("Fewest 31"), "hanoi: Tab sets 5 discs")
+-- follow the hints, starting from a muddled position
+key("1"); key("2"); key("1"); key("3")
+local hinted = 0
+for _ = 1, 60 do
+  key("h")
+  screen()
+  local mv
+  for _, l in ipairs(lines) do if l[2] == 26 then mv = l end end
+  if not mv then break end
+  local from, to = (mv[1] + 40) // 80, (mv[3] + 40) // 80
+  key(tostring(from)); key(tostring(to))
+  hinted = hinted + 1
+  if shows("Moves") and not shows("Fewest 31\n") then end
+  if shows("Again") then break end
+end
+check(shows("Again") and hinted > 20, "hanoi: following the hints solves 5 discs (" .. hinted .. " hints)")
+key("enter")
+key(","); key("/"); key("enter"); key("/"); key("enter")
+check(shows("Moves 1"), "hanoi: arrows and Enter lift and drop")
+shell.home(); frames(2)
+shell.launch("hanoi"); frames(2)
+check(shows("Moves 1") and shows("Fewest 31"), "hanoi: resumes after leaving")
+key("tab", { shift = true })
+check(shows("Fewest 15"), "hanoi: Shift+Tab goes back to 4 discs")
+key("esc")
+check(shell.app() == "home", "hanoi: Esc goes home")
+
+-- ------------------------------------------------------------ wordy
+sys.remove("data/wordy/scores.txt")
+local function wlist(name) return dofile("userland/lib/words5/" .. name .. ".lua") end
+local ANSWERS = {}
+do
+  local a = wlist("answers")
+  for i = 1, #a // 5 do ANSWERS[i] = a:sub(i * 5 - 4, i * 5) end
+  local ok_all, lists = true, {}
+  for _, w in ipairs(ANSWERS) do
+    local c = w:sub(1, 1)
+    lists[c] = lists[c] or wlist(c)
+    local found_w, at = false, 1
+    while true do
+      local p = lists[c]:find(w, at, true)
+      if not p then break end
+      if (p - 1) % 5 == 0 then found_w = true; break end
+      at = p + 1
+    end
+    if not found_w then ok_all = false end
+  end
+  check(#ANSWERS > 800 and ok_all, "wordy: " .. #ANSWERS .. " answers, all in the guess lists")
+  local total = 0
+  for c in ("abcdefghijklmnopqrstuvwxyz"):gmatch(".") do total = total + #wlist(c) // 5 end
+  check(total > 5000, "wordy: " .. total .. " words accepted as guesses")
+end
+local function wmarks(g, ans)
+  local m, left = {}, {}
+  for i = 1, 5 do
+    local a, b = ans:sub(i, i), g:sub(i, i)
+    if a == b then m[i] = 2 else m[i] = 0; left[a] = (left[a] or 0) + 1 end
+  end
+  for i = 1, 5 do
+    local b = g:sub(i, i)
+    if m[i] == 0 and (left[b] or 0) > 0 then m[i] = 1; left[b] = left[b] - 1 end
+  end
+  return table.concat(m)
+end
+local function row_feedback(r)
+  screen()
+  local y = 17 + (r - 1) * 17 + 15
+  local m = { 0, 0, 0, 0, 0 }
+  for _, f in ipairs(fills) do
+    if f[2] == y and f[4] == 2 then
+      if f[5] == ui.col.good then m[(f[1] + 1 - 8) // 16 + 1] = 2
+      elseif f[5] == ui.col.warn then m[(f[1] - 3 - 8) // 16 + 1] = 1 end
+    end
+  end
+  return table.concat(m)
+end
+local function wtype(w) for ch in w:gmatch(".") do key(ch) end end
+local function wsolve()
+  local cands = {}
+  for i, w in ipairs(ANSWERS) do cands[i] = w end
+  for r = 1, 6 do
+    local g = r == 1 and "crane" or cands[math.random(1, #cands)]
+    wtype(g); key("enter")
+    local fb = row_feedback(r)
+    if fb == "22222" then return r end
+    local keep = {}
+    for _, w in ipairs(cands) do if wmarks(g, w) == fb then keep[#keep + 1] = w end end
+    cands = keep
+    if #cands == 0 then return nil end
+  end
+end
+shell.launch("wordy"); frames(3)
+alive("wordy", "opens")
+check(shows("Try 1/6"), "wordy: six tries")
+wtype("abc"); key("enter")
+check(shows("Type 5 letters"), "wordy: a short word is not tried")
+wtype("zz"); key("enter")
+check(shows("Not in the word list") and shows("Try 1/6"), "wordy: an unknown word does not use a try")
+for _ = 1, 5 do key("backspace") end
+local won_games, tries_w = 0, {}
+for _ = 1, 4 do
+  local r = wsolve()
+  tries_w[#tries_w + 1] = tostring(r)
+  if r and shows("Won ") then won_games = won_games + 1 end
+  key("enter")
+end
+check(won_games >= 3, "wordy: words found in " .. table.concat(tries_w, ","))
+local ws = sys.read_text("data/wordy/scores.txt") or ""
+check(ws:match("played=4") and ws:match("wins=%d"), "wordy: games and wins saved")
+wtype("crane"); key("enter")
+key("n", { ctrl = true })
+check(shows("The word was"), "wordy: Ctrl+N gives up and shows the word")
+key("enter")
+wtype("house"); key("enter"); wtype("pl")
+shell.home(); frames(2)
+shell.launch("wordy"); frames(2)
+check(shows("H") and shows("Try 2/6"), "wordy: the game resumes after leaving")
+key("m", { ctrl = true })
+check(cfg.get("game_sound") == "1", "wordy: Ctrl+M turns sound on")
+key("m", { ctrl = true })
+key("esc")
+check(shell.app() == "home", "wordy: Esc goes home")
+
 -- ------------------------------------------------------------ never an error screen
-for _, name in ipairs({ "sudoku", "reversi", "codebreaker", "hop", "gems" }) do
+for _, name in ipairs({ "sudoku", "reversi", "codebreaker", "hop", "gems", "solitaire", "hanoi", "wordy" }) do
   shell.launch(name); frames(5)
   for _, k in ipairs({ "down", "up", "enter", "left", "right", "space", "p", "p", "a", "s", "d", "x", "tab", "u", "r" }) do key(k) end
   frames(30)

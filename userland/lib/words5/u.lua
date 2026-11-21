@@ -1,0 +1,3 @@
+-- Five-letter words starting with u, five letters each, no spaces.
+-- Copyright 2000-2018 by Kevin Atkinson (SCOWL); see words5/answers.lua.
+return "udderukaseulcerulnaeulnarultraumbelumberumbraumiakumpedunaryunbarunbidunboxuncapuncleuncutunderundidundueunfedunfitunfixunifyunionuniteunitsunityunlitunmanunmetunpinunsayunsetuntieuntilunwedunzipupenduppedupperupseturbanurgedurgesurineusageusersusherusingusualusurpusuryuteriutteruvula"
