@@ -68,7 +68,7 @@ Store-only apps (not built into the firmware) go in `store/apps/`.
 | System | Settings, Task Manager, Files, App Store |
 | Tools | Clock (alarms with repeat days and snooze, timers, stopwatch, Study: Pomodoro with stats), Notes and To-do, Calculator and unit converter, Lua REPL, Morse, Steps, Sensors (Grove I2C), Level, Hello |
 | Media | Recorder, Music (WAV), Sound Lab (level, spectrum, tuner), Beat Box, Piano, Images |
-| Games | Snake, Blocks, 2048, Marble (tilt maze), Adventure, Mines, Type Rain (typing), Bricks, Crates (box-pushing puzzle) |
+| Games | Snake, Blocks, 2048, Marble (tilt maze), Adventure, Mines, Type Rain (typing), Bricks, Crates (box-pushing puzzle), Sudoku, Reversi (vs computer), Codebreaker, Hop (one-key runner), Gems (match three) |
 | Net | Weather, Network (scan, DNS, ping), IR Remote, Air Mouse, LoRa Chat, GPS, Nearby, USB Keys, USB Serial |
 
 LoRa Chat and GPS need the Cap LoRa-1262. Air Mouse and USB Keys need Settings > USB > Mouse or Keyboard, followed by a reboot.
