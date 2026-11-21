@@ -36,6 +36,7 @@ local hist = mt.history(64)  -- (from, id) of recent packets: we never relay, so
 local nodes_dirty = false
 local scroll, input, blink = 0, "", true
 local queue, waiting, traces = {}, {}, {}
+local heard = {}  -- our public messages waiting to be heard relayed: id hex -> { line, at }
 local crows, csel, ctop = {}, 1, 1  -- the DMs tab's contact list
 local gps_left, info_left, pos_left, save_left, gc_left = 0, 5, 60, 30, 15
 
@@ -232,7 +233,12 @@ local function header(to, want_ack, hop_limit, channel)
     want_ack = want_ack, channel = channel, relay = mt.last_byte(S.me) }
 end
 
+-- Receive only (Setup > Transmit: Off, cfg lora_rx_only): nothing is queued,
+-- automatic sends included. The firmware refuses to transmit as well.
+function S.rx_only() return cfg.get("lora_rx_only") == "1" end
+
 local function enqueue(h, payload)
+  if S.rx_only() then return { frame = "" } end
   hist.check(S.me, h.id)
   local q = { frame = mt.pack(h, payload), at = S.now + 0.05 + math.random() * 0.25 }
   queue[#queue + 1] = q
@@ -392,8 +398,11 @@ local function on_packet(pk)
   local h, payload = mt.unpack(tostring(pk.data or ""))
   if not h then return end
   if mt.same(h.from, S.me) then  -- a relay of ours: it reached the mesh
-    local w = waiting[pb.hex32(h.id)]
+    local k = pb.hex32(h.id)
+    local w = waiting[k]
     if w then w.relayed = true end
+    local hb = heard[k]
+    if hb then hb.line.status, heard[k] = "heard", nil end
     return
   end
   if not hist.check(h.from, h.id) then return end
@@ -439,6 +448,7 @@ function S.start_radio()
   S.radio_err = not S.radio_ok and tostring(ok and (e or "LoRa radio not found") or r) or nil
   if S.radio_ok then
     push(S.chat_lines(1), string.format("* %s %.3f MHz (slot %d) as %s", p.name, S.freq, slot, mt.id_text(S.me)), "sys")
+    if S.rx_only() then push(S.chat_lines(1), "* Receive only: nothing will be sent (Setup > Transmit)", "sys") end
     info_left = 5
   end
 end
@@ -537,6 +547,9 @@ function app.update(dt)
   gc_left = gc_left - dt
   if gc_left <= 0 then
     gc_left = 15
+    -- the channel's background level, for finding interference (on battery too: it's in the SD log)
+    local nz = lora.noise and lora.noise()
+    if nz then print(string.format("mesh noise: %d dBm", math.floor(nz + 0.5))) end
     local before = collectgarbage("count")
     collectgarbage("collect")
     S.gc_n = (S.gc_n or 0) + 1
@@ -547,6 +560,13 @@ function app.update(dt)
     end
   end
 
+  if S.rx_only() then  -- nothing queued, nothing retried: DMs still waiting are given up
+    if #queue > 0 then queue = {} end
+    for k, w in pairs(waiting) do w.line.status, w.line[2], waiting[k] = "fail", "fail", nil end
+  end
+  for k, hb in pairs(heard) do  -- a public message nobody relayed within 30 s
+    if S.now >= hb.at then hb.line.status, heard[k] = "unheard", nil end
+  end
   for k, w in pairs(waiting) do  -- three tries for a DM without an ACK
     if S.now >= w.at then
       if w.tries >= 3 then
@@ -560,10 +580,20 @@ function app.update(dt)
     end
   end
 
-  if #queue > 0 and not lora.busy() and S.now >= queue[1].at then
-    local q = table.remove(queue, 1)
+  -- a frame leaves the queue once the radio takes it; the radio declines while
+  -- the channel is busy or a packet waits to be read, so it tries again shortly
+  if #queue > 0 and not S.rx_only() and not lora.busy() and S.now >= queue[1].at then
+    local q = queue[1]
     local ok, r = pcall(lora.send, q.frame)
-    if ok and r ~= false then S.tx = S.tx + 1 end
+    if ok and r == true then
+      table.remove(queue, 1)
+      S.tx = S.tx + 1
+      print(string.format("mesh: sent %d bytes%s", #q.frame, (q.tries or 0) > 0 and (" after " .. q.tries .. " busy") or ""))
+    else
+      q.tries = (q.tries or 0) + 1
+      q.at = S.now + 0.15 + math.random() * 0.5
+      if q.tries > 40 then table.remove(queue, 1); print("mesh: gave up sending (channel busy)") end
+    end
   end
 
   if tab == 1 then S.unread_chat = nil end
@@ -595,8 +625,9 @@ local function draw_lines(list, label)
       local st = l.status
       if st == "wait" then ui.text(228, y, "..", col.muted)
       elseif st == "fail" then ui.text(231, y, "!", col.warn)
-      elseif st then  -- a tick when the mesh relayed it, two when they confirmed
-        local c = st == "ok" and col.good or col.muted
+      elseif st == "unheard" then ui.text(231, y, "?", col.muted)
+      elseif st then  -- a tick when the mesh relayed it (green for a public message), two when they confirmed
+        local c = (st == "ok" or st == "heard") and col.good or col.muted
         gfx.line(227, y + 4, 229, y + 6, c); gfx.line(229, y + 6, 233, y + 1, c)
         if st == "ok" then gfx.line(232, y + 6, 236, y + 1, c) end
       end
@@ -695,6 +726,7 @@ function app.key(k)
       return true
     end
     S.unread[S.peer] = nil
+    if k.key == "enter" and S.rx_only() then shell.toast("Receive only: turn Transmit on in Setup"); return true end
     if k.key == "esc" and input == "" then  -- back to the contact list
       S.peer = nil
       cfg.set("mesh_peer", nil)
@@ -708,9 +740,12 @@ function app.key(k)
     scroll = 0
     return true
   end
+  if k.key == "enter" and S.rx_only() then shell.toast("Receive only: turn Transmit on in Setup"); return true end
   return type_key(k, d, function(t)
-    S.send_channel(S.chan_sel, mt.BROADCAST, { portnum = mt.PORT.TEXT, payload = t })
-    add(S.chat_lines(S.chan_sel), chat_file(S.chan_sel), "me: " .. t, "me")
+    local id = S.send_channel(S.chan_sel, mt.BROADCAST, { portnum = mt.PORT.TEXT, payload = t })
+    local line = add(S.chat_lines(S.chan_sel), chat_file(S.chan_sel), "me: " .. t, "me")
+    line.status = "wait"  -- until another node is heard relaying it (Meshtastic's implicit ACK)
+    heard[pb.hex32(id)] = { line = line, at = S.now + 30 }
   end)
 end
 

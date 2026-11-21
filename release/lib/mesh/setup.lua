@@ -7,6 +7,7 @@ local col = ui.col
 local POS_MODES = { "Off", "Approx", "Precise" }
 local VOLS = { 0, 10, 25, 50, 100 }  -- Mesh alerts, percent of the volume (cfg mesh_vol)
 local rows, sel, top = {}, 1, 1
+local noise = nil  -- smoothed channel level, dBm
 local refresh = 0
 
 -- ---------------------------------------------------------------- base64
@@ -51,6 +52,7 @@ local function build()
     { label = "Preset", value = S.preset and S.preset.name or "?" },
     { label = "Share position", value = POS_MODES[S.pos_mode] },
     { label = "Listen when closed", value = cfg.get("mesh_bg") == "1" and "On" or "Off", bg = true },
+    { label = "Transmit", value = S.rx_only() and "Off (receive only)" or "On", tx = true },
     { label = "DMs from new people", value = cfg.get("mesh_dm_new") == "0" and "Quiet" or "Sound", dmnew = true },
     { label = "Alert volume", value = (function(v) return v == 0 and "Off" or v .. "%" end)(tonumber(cfg.get("mesh_vol")) or 25),
       vol = true },
@@ -61,6 +63,14 @@ local function build()
       badge = quiet and "Q" or nil }
   end
   if #S.channels < 8 then rows[#rows + 1] = { label = "+ Add private channel", add = true } end
+  -- the channel's background level: about -115 dBm is quiet; -95 and up
+  -- (a laptop, charger or LED lights near the antenna) hides most nodes
+  local nz = lora and lora.noise and lora.noise()
+  if nz then
+    noise = noise and noise * 0.7 + nz * 0.3 or nz
+    rows[#rows + 1] = { label = "Channel noise", value = string.format("%d dBm%s", math.floor(noise + 0.5),
+      noise > -100 and " (noisy)" or noise > -108 and " (fair)" or " (quiet)"), dim = true }
+  end
   rows[#rows + 1] = { label = "Node", value = S.mt.id_text(S.me), dim = true }
   rows[#rows + 1] = { label = "Packets", value = "TX " .. S.tx .. "  RX " .. S.rx, dim = true }
   sel = math.max(1, math.min(sel, #rows))
@@ -133,6 +143,15 @@ local function change(r, d)
     S.position_soon()
     shell.toast(S.pos_mode == 1 and "Position not shared" or S.pos_mode == 2 and "Sharing an approximate position (~5 km)"
       or "Sharing your exact position", 2)
+  elseif r.tx then
+    if S.rx_only() then
+      shell.confirm("Transmit again?", "Only with the antenna on: sending without one can damage the radio.", function(yes)
+        if yes then cfg.set("lora_rx_only", nil); shell.toast("Transmit on", 2); build() end
+      end)
+    else
+      cfg.set("lora_rx_only", "1")
+      shell.toast("Receive only: nothing will be sent", 2)
+    end
   elseif r.bg then
     local on = cfg.get("mesh_bg") ~= "1"
     cfg.set("mesh_bg", on and "1" or "0")
